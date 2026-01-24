@@ -5,17 +5,20 @@ import requests
 
 app = Flask(__name__)
 
-# โหลดข้อมูลสินค้าจากไฟล์ json
-with open('products.json', encoding='utf-8') as f:
-    PRODUCT_DATA = json.load(f)
+# โหลดข้อมูลสินค้า
+try:
+    with open('products.json', encoding='utf-8') as f:
+        PRODUCT_DATA = json.load(f)
+    print(f"✅ Loaded {len(PRODUCT_DATA)} products.")
+except Exception as e:
+    print(f"❌ Error loading products.json: {e}")
+    PRODUCT_DATA = {}
 
-# ดึงค่ารหัสผ่านจาก Server Environment (เดี๋ยวเราไปตั้งค่าใน Render)
 PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
 
 @app.route('/', methods=['GET'])
 def verify():
-    # Facebook ตรวจสอบยืนยันตัวตน
     if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.challenge"):
         if request.args.get("hub.verify_token") == VERIFY_TOKEN:
             return request.args.get("hub.challenge"), 200
@@ -24,23 +27,35 @@ def verify():
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.json
+    # print(f"DEBUG: Received Event: {data}") # เปิดบรรทัดนี้ถ้าอยากเห็นข้อมูลดิบทั้งหมด
+    
     if data['object'] == 'page':
         for entry in data['entry']:
             for event in entry['messaging']:
                 if 'message' in event:
                     sender_id = event['sender']['id']
+                    
                     if 'text' in event['message']:
                         user_message = event['message']['text'].strip()
+                        print(f"📩 User Typed: '{user_message}'") # ดูว่าบอทเห็นข้อความเป็นตัวอะไร
                         
-                        # ตรวจสอบว่ามีคีย์เวิร์ดในฐานข้อมูลไหม
-                        if user_message in PRODUCT_DATA:
-                            image_url = PRODUCT_DATA[user_message]
-                            send_image(sender_id, image_url)
+                        # เช็คสินค้า (ลองเทียบแบบไม่สนตัวพิมพ์เล็กใหญ่)
+                        # เช่น user พิมพ์ a001 แต่ในไฟล์เป็น A001 ก็จะเจอ
+                        found_key = None
+                        for key in PRODUCT_DATA:
+                            if key.lower() == user_message.lower():
+                                found_key = key
+                                break
+                        
+                        if found_key:
+                            print(f"✅ Found match! Key: {found_key}")
+                            send_image(sender_id, PRODUCT_DATA[found_key])
                         else:
-                            print(f"User sent: {user_message} (Not found)")
-                            # ถ้าอยากให้ตอบกลับเมื่อหาไม่เจอ ให้เปิดบรรทัดล่างนี้
-                            # send_text(sender_id, "ไม่พบสินค้ารหัสนี้นะครับ")
-                            
+                            print(f"❌ Not found in database.")
+                            # ปริ้นท์ตัวอย่างกุญแจในระบบออกมาดู 5 ตัวแรก
+                            keys_sample = list(PRODUCT_DATA.keys())[:5]
+                            print(f"   (Sample keys in DB: {keys_sample})")
+
     return "ok", 200
 
 def send_image(recipient_id, image_url):
@@ -55,15 +70,11 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
-
-def send_text(recipient_id, text):
-    params = {"access_token": PAGE_ACCESS_TOKEN}
-    data = {
-        "recipient": {"id": recipient_id},
-        "message": {"text": text}
-    }
-    requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
+    
+    # ส่งข้อมูลและปรินท์ผลลัพธ์ว่า Facebook ตอบว่าอะไร
+    r = requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
+    print(f"📤 Sending Image Result: Status {r.status_code}")
+    print(f"   Response: {r.text}")
 
 if __name__ == '__main__':
     app.run(port=5000)
