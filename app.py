@@ -42,13 +42,17 @@ update_file_list()
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
+# --- ฟังก์ชันส่ง (ฝัง Metadata กันลูป) ---
 def send_message(recipient_id, text):
     print(f"💬 Sending message to {recipient_id}: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
-        "message": {"text": text}
+        "message": {
+            "text": text,
+            "metadata": "BOT_SENT_THIS" # 👈 ฝังนามบัตรไว้ตรงนี้
+        }
     }
     requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
 
@@ -62,7 +66,8 @@ def send_image(recipient_id, image_url):
             "attachment": {
                 "type": "image",
                 "payload": {"url": image_url, "is_reusable": True}
-            }
+            },
+            "metadata": "BOT_SENT_THIS" # 👈 ฝังนามบัตรไว้ตรงนี้
         }
     }
     requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
@@ -78,7 +83,7 @@ def process_message(target_id, text, is_admin_sender):
             if (code_key, full_filename) not in found_actions:
                 found_actions.append((code_key, full_filename))
 
-    # ✅ เจอ -> ส่ง
+    # ✅ เจอ -> ส่ง (พร้อมบอกรหัส)
     if found_actions:
         for code_key, filename in found_actions:
             print(f"✅ Code found ({code_key}) -> Sending to {target_id}")
@@ -86,21 +91,23 @@ def process_message(target_id, text, is_admin_sender):
             send_message(target_id, msg)
             send_image(target_id, get_image_url(filename))
             
-    # ถ้าเป็น Admin จบแค่นี้ (ห้ามไปแจ้งเตือนอะไรอีก)
+    # ถ้าเป็น Admin ให้จบแค่นี้ (ไม่แจ้งเตือนรหัสผิดให้กวนใจ)
     if is_admin_sender:
         return 
 
-    # --- User Only Logic ---
+    # --- ส่วนของ User (User Only) ---
     unknown_codes = []
     potential_matches = re.findall(r'[a-z0-9]*\d+[a-z0-9]*', text_lower)
     
     for word in potential_matches:
         if len(word) >= 4:
             is_known = False
+            # เช็คว่าอยู่ในรายการที่เจอแล้วหรือยัง
             for found_key, _ in found_actions:
                 if found_key in word or word in found_key:
                     is_known = True
                     break
+            # เช็คกับ Database อีกที
             if not is_known:
                 for known_key in CACHED_FILES.keys():
                     if known_key in word: 
@@ -109,11 +116,13 @@ def process_message(target_id, text, is_admin_sender):
             if not is_known and word not in unknown_codes:
                 unknown_codes.append(word)
 
+    # แจ้งเตือนรหัสผิด
     if unknown_codes:
         for bad_code in unknown_codes:
             msg = f"⚠️ รหัส '{bad_code}' ไม่พบในระบบ หรืออาจพิมพ์ผิดครับ\n(รอแอดมินตรวจสอบให้นะครับ 🙏)"
             send_message(target_id, msg)
 
+    # สอนวิธีใช้ (ถ้าไม่เจออะไรเลย)
     if not found_actions and not unknown_codes:
         if 'รูป' in text_lower or 'ภาพ' in text_lower:
             msg = "หากต้องการดูรูปสินค้า รบกวนพิมพ์ 'รหัสสินค้า' ได้เลยครับ (เช่น 999AA01)\n\nหรือถ้าไม่ทราบรหัส รบกวนรอแอดมินสักครู่นะครับ 😊"
@@ -136,18 +145,17 @@ def webhook():
                     if 'message' in event:
                         text = event['message'].get('text', '')
                         
-                        # --- จุดแก้ตาย: ป้องกัน Loop ---
-                        # เช็คว่าข้อความนี้ถูกส่งโดย App (บอท) หรือไม่?
-                        # ถ้ามี 'app_id' แสดงว่าเป็นบอทพูดเอง -> ให้ข้ามทันที!
-                        if 'app_id' in event.get('message', {}):
+                        # --- 🛑 จุดแก้: เช็ค Metadata เพื่อกันลูป (แม่นยำกว่า App ID) ---
+                        # ถ้าข้อความนี้มีนามบัตร "BOT_SENT_THIS" แปลว่าเป็นบอทพูดเอง -> ข้าม
+                        if event.get('message', {}).get('metadata') == "BOT_SENT_THIS":
                             print(f"🤖 Bot self-reply detected (Ignoring loop): {text}")
                             continue
-                        # -----------------------------
+                        # -----------------------------------------------------------
 
                         is_echo = event.get('message', {}).get('is_echo', False)
                         
                         if is_echo:
-                            # Admin (Human) พิมพ์: ส่งหาลูกค้า
+                            # Admin พิมพ์: ส่งหาลูกค้า
                             if 'recipient' in event and 'id' in event['recipient']:
                                 target_id = event['recipient']['id']
                                 print(f"👮 Admin typed: {text}")
