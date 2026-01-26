@@ -18,27 +18,25 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 CACHED_FILES = {}
 
-# --- Debug Token ---
-def debug_token_type():
-    print("\n🔐 --- TOKEN DEBUGGER ---")
+# --- Debug Token (เช็คว่า Token ยังไม่หมดอายุ) ---
+def debug_token_status():
+    print("\n🔐 --- SYSTEM CHECK ---")
     url = f"https://graph.facebook.com/me?access_token={PAGE_ACCESS_TOKEN}"
     try:
         r = requests.get(url)
         if r.status_code == 200:
-            data = r.json()
-            name = data.get('name', 'Unknown')
-            print(f"✅ SUCCESS: Page Token ({name}) -> ถูกต้อง!")
+            print(f"✅ Token Status: Active (Page: {r.json().get('name')})")
         else:
             print(f"⚠️ Token Error: {r.status_code}")
-    except Exception as e:
-        print(f"Error checking token: {e}")
-    print("--------------------------\n")
+    except:
+        pass
+    print("----------------------\n")
 
-debug_token_type()
+debug_token_status()
 
 def update_file_list():
     global CACHED_FILES
-    print("🔄 Updating file list from GitHub...")
+    print("🔄 Loading file list from GitHub...")
     api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{FOLDER_NAME}?ref={BRANCH}"
     
     headers = {
@@ -56,15 +54,16 @@ def update_file_list():
             for item in data:
                 if item['type'] == 'file':
                     full_name = item['name'] 
+                    # ตัดช่องว่าง + ตัวเล็ก เพื่อให้ค้นหาง่าย
                     key = full_name.rsplit('.', 1)[0].strip().lower()
                     CACHED_FILES[key] = full_name
-            print(f"📂 FILES LOADED: {len(CACHED_FILES)} files ready.")
+            print(f"📂 READY: Loaded {len(CACHED_FILES)} product codes.")
             return True
         else:
-            print(f"⚠️ Failed to fetch list: {r.status_code}")
+            print(f"⚠️ GitHub Error: {r.status_code}")
             return False
     except Exception as e:
-        print(f"❌ Error updating file list: {e}")
+        print(f"❌ Error: {e}")
         return False
 
 update_file_list()
@@ -85,113 +84,11 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    # ใช้ v24.0 ตามที่คุณมี
-    requests.post("https://graph.facebook.com/v24.0/me/messages", params=params, json=data)
+    # ใช้ v19.0 (มาตรฐานปัจจุบัน)
+    r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
+    if r.status_code != 200:
+        print(f"💥 Facebook Send Error: {r.text}")
 
-# ==========================================
-# 1. ระบบพิมพ์หา (Manual Search)
-# ==========================================
-def check_text_command(user_id, text):
-    text_clean = text.strip().lower()
-    if text_clean in CACHED_FILES:
-        full_filename = CACHED_FILES[text_clean]
-        print(f"✅ Text Match: '{text}' -> Sending {full_filename}")
-        image_url = get_github_image_url(full_filename)
-        send_image(user_id, image_url)
-        return True
-    return False
-
-# ==========================================
-# 2. ระบบหาป้าย (Deep Fetch V24.0)
-# ==========================================
-def fetch_label_name_by_id(label_id):
-    """เจาะถามชื่อป้ายด้วย ID (แก้ปัญหาชื่อว่าง)"""
-    url = f"https://graph.facebook.com/v24.0/{label_id}" # ใช้ v24.0
-    params = {
-        "access_token": PAGE_ACCESS_TOKEN,
-        "fields": "name"
-    }
-    try:
-        r = requests.get(url, params=params)
-        if r.status_code == 200:
-            name = r.json().get('name', '')
-            # print(f"      (Deep Fetch Result: ID {label_id} = '{name}')")
-            return name
-    except:
-        pass
-    return ''
-
-def check_labels_auto(user_id):
-    print(f"🔎 Scanning Labels for {user_id}...") # บรรทัดนี้ต้องขึ้นแน่นอน
-    
-    url = "https://graph.facebook.com/v24.0/me/custom_labels"
-    params = {
-        "access_token": PAGE_ACCESS_TOKEN,
-        "limit": 100,
-        "fields": "name,id"
-    }
-    
-    found = False
-    
-    while True:
-        try:
-            r = requests.get(url, params=params)
-            data = r.json()
-            labels = data.get('data', [])
-            
-            if not labels: break
-
-            for label in labels:
-                raw_name = label.get('name', '')
-                label_id = label.get('id')
-                
-                # ถ้าชื่อว่าง -> เจาะถามใหม่
-                if not raw_name:
-                    raw_name = fetch_label_name_by_id(label_id)
-                
-                if not raw_name: continue
-                    
-                clean_name = raw_name.strip().lower()
-                
-                # ถ้าเจอชื่อป้ายที่ตรงกับไฟล์
-                if clean_name in CACHED_FILES:
-                    print(f"   🎯 Potential Tag Found: '{raw_name}' (Checking User...)")
-                    
-                    if is_user_in_label(label_id, user_id):
-                        full_filename = CACHED_FILES[clean_name]
-                        print(f"   🎉 USER IS IN TAG: {raw_name} -> Sending Image")
-                        image_url = get_github_image_url(full_filename)
-                        send_image(user_id, image_url)
-                        found = True
-                        # ไม่ return แล้ว เพื่อให้มันหาต่อเผื่อมีป้ายอื่น
-            
-            if 'paging' in data and 'next' in data['paging']:
-                url = data['paging']['next']
-                params = {"access_token": PAGE_ACCESS_TOKEN}
-            else:
-                break
-                
-        except Exception as e:
-            print(f"💥 Error scanning labels: {e}")
-            break
-            
-    if not found:
-        print("❌ Scan finished. User matches no tags.")
-
-def is_user_in_label(label_id, user_id):
-    url = f"https://graph.facebook.com/v24.0/{label_id}/users"
-    params = {"access_token": PAGE_ACCESS_TOKEN, "limit": 2000}
-    try:
-        r = requests.get(url, params)
-        if r.status_code == 200:
-            ids = [u['id'] for u in r.json().get('data', [])]
-            return user_id in ids
-    except: pass
-    return False
-
-# ==========================================
-# MAIN WEBHOOK
-# ==========================================
 @app.route('/', methods=['GET'])
 def verify():
     if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.challenge"):
@@ -206,20 +103,24 @@ def webhook():
         for entry in data['entry']:
             if 'messaging' in entry:
                 for event in entry['messaging']:
+                    # กรองข้อความ Echo (บอทคุยกับตัวเอง)
                     if event.get('message', {}).get('is_echo'):
                         continue
                         
                     if 'message' in event:
                         sender_id = event['sender']['id']
-                        user_text = event['message'].get('text', '')
+                        # รับข้อความมา แล้วตัดช่องว่างทิ้ง
+                        user_text = event['message'].get('text', '').strip().lower()
                         
-                        # --- ทำงานขนาน 2 ระบบ (ไม่บล็อคกันเองแล้ว) ---
-                        
-                        # 1. ระบบพิมพ์ (ถ้าเจอ ก็ส่ง)
-                        check_text_command(sender_id, user_text)
-                        
-                        # 2. ระบบป้าย (เช็คทุกครั้ง แม้จะพิมพ์ถูกแล้วก็ตาม)
-                        check_labels_auto(sender_id)
+                        if user_text in CACHED_FILES:
+                            full_filename = CACHED_FILES[user_text]
+                            print(f"✅ Found Code: '{user_text}' -> Sending {full_filename}")
+                            
+                            image_url = get_github_image_url(full_filename)
+                            send_image(sender_id, image_url)
+                        else:
+                            # (Optional) ถ้าพิมพ์ผิด ไม่ต้องทำอะไร หรือจะให้ตอบกลับก็ได้
+                            print(f"User typed: '{user_text}' (No match)")
                             
     return "ok", 200
 
