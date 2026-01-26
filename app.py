@@ -18,7 +18,7 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 CACHED_FILES = {}
 
-# --- Debug Token (เช็คครั้งสุดท้าย) ---
+# --- Debug Token ---
 def debug_token_type():
     print("\n🔐 --- TOKEN DEBUGGER ---")
     url = f"https://graph.facebook.com/me?access_token={PAGE_ACCESS_TOKEN}"
@@ -75,25 +75,27 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันดึงป้ายทั้งหมด (ใช้ v19.0 + Page Token) ---
+# --- ฟังก์ชันดึงป้าย (สูตร v16.0 + Pagination) ---
 def get_all_relevant_labels():
     relevant_labels = []
     
-    # กลับมาใช้ v19.0 (เพราะ Token ถูกแล้ว)
-    url = "https://graph.facebook.com/v19.0/me/custom_labels"
+    # ⭐ ใช้ v16.0 เท่านั้น (v19.0 จะ Error)
+    url = "https://graph.facebook.com/v16.0/me/custom_labels"
     
-    # เทคนิคสำคัญ: ต้องใส่ access_token ใน params เสมอ แม้ตอนเปลี่ยนหน้า
+    # params ตั้งต้น
     params = {
         "access_token": PAGE_ACCESS_TOKEN,
         "limit": 100,
-        "fields": "id,name"
+        # v16.0 ไม่ต้องระบุ fields name ก็ได้ หรือถ้าใส่ก็ไม่ error
     }
     
-    print("🔎 Scanning ALL labels (turning pages)...")
+    print("🔎 Scanning ALL labels (API v16.0 + Turning Pages)...")
     
     while True:
         try:
             r = requests.get(url, params=params)
+            
+            # ถ้า Error ให้ break
             if r.status_code != 200:
                 print(f"⚠️ Error fetching labels page: {r.status_code} - {r.text}")
                 break
@@ -101,18 +103,17 @@ def get_all_relevant_labels():
             data = r.json()
             labels = data.get('data', [])
             
-            # กรองเฉพาะป้ายที่ตรงกับไฟล์รูป
+            # กรองป้าย
             for label in labels:
                 label_name = label.get('name', '').lower()
-                # print(f"   - Saw label: {label_name}") # เปิดบรรทัดนี้ถ้าอยากเห็นทุกป้าย
                 if label_name in CACHED_FILES:
                     relevant_labels.append(label)
                     print(f"   👉 FOUND TARGET LABEL: {label['name']} (ID: {label['id']})")
             
-            # พลิกหน้าต่อไป (Pagination)
+            # พลิกหน้า (Pagination)
             if 'paging' in data and 'next' in data['paging']:
                 url = data['paging']['next']
-                # สำคัญ: url 'next' อาจจะไม่มี access_token ติดมา เราต้องใส่เพิ่มเข้าไป
+                # สำคัญ: url 'next' ต้องเติม token ใหม่เสมอ
                 params = {"access_token": PAGE_ACCESS_TOKEN}
             else:
                 break # หมดหน้าแล้ว
@@ -125,28 +126,27 @@ def get_all_relevant_labels():
     return relevant_labels
 
 def check_page_labels_for_user(user_id):
-    # 1. หาป้ายที่ชื่อตรงกับรูปมาก่อน
+    # 1. หาป้ายเป้าหมาย (ด้วย v16.0 + Pagination)
     target_labels = get_all_relevant_labels()
     
     if not target_labels:
-        print("❌ No labels match our file list. (Customer might have Ad labels only)")
+        print("❌ No labels match our file list.")
         return
 
     found_any = False
     
-    # 2. เจาะดูทีละป้าย ว่ามีลูกค้าคนนี้อยู่ไหม
+    # 2. เจาะดูคนในป้าย
     for label_obj in target_labels:
         label_name = label_obj.get('name', '').lower()
         label_id = label_obj.get('id')
         
         print(f"🧐 Checking inside label '{label_name}'...")
         
-        # ใช้ v19.0 เจาะดูคน
-        url_users = f"https://graph.facebook.com/v19.0/{label_id}/users"
+        # ใช้ v16.0 เจาะดูคน
+        url_users = f"https://graph.facebook.com/v16.0/{label_id}/users"
         params_users = {
             "access_token": PAGE_ACCESS_TOKEN,
-            "limit": 5000, # ดึงมาเยอะๆ เลย
-            "fields": "id"
+            "limit": 5000 # ดึงมาเยอะๆ
         }
         
         try:
@@ -155,7 +155,6 @@ def check_page_labels_for_user(user_id):
                 users_data = r_users.json().get('data', [])
                 user_ids = [u['id'] for u in users_data]
                 
-                # เช็คว่าลูกค้าเราอยู่ในนั้นไหม
                 if user_id in user_ids:
                     full_filename = CACHED_FILES[label_name]
                     print(f"🎉 BINGO! User {user_id} found in tag '{label_name}'")
@@ -164,9 +163,9 @@ def check_page_labels_for_user(user_id):
                     image_url = get_github_image_url(full_filename)
                     send_image(user_id, image_url)
                     found_any = True
-                    break # เจอแล้วหยุดเลย (หรือเอาออกถ้าอยากให้ส่งหลายรูป)
+                    break 
                 else:
-                    print(f"   User not in this label (Total people in label: {len(users_data)})")
+                    print(f"   User not in this label.")
             else:
                 print(f"⚠️ Failed to check users: {r_users.status_code}")
                 
@@ -174,7 +173,7 @@ def check_page_labels_for_user(user_id):
             print(f"💥 Error checking users: {e}")
 
     if not found_any:
-        print("❌ User checked against candidate labels, but not found.")
+        print("❌ User checked against labels, but not found.")
 
 @app.route('/', methods=['GET'])
 def verify():
@@ -194,7 +193,7 @@ def webhook():
                         continue
                     if 'message' in event:
                         sender_id = event['sender']['id']
-                        print(f"📩 checking tags for user: {sender_id}")
+                        print(f"📩 Checking tags for user: {sender_id}")
                         check_page_labels_for_user(sender_id)
     return "ok", 200
 
@@ -210,7 +209,8 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
+    # ใช้ v16.0 ส่งข้อความ
+    requests.post("https://graph.facebook.com/v16.0/me/messages", params=params, json=data)
 
 if __name__ == '__main__':
     app.run(port=5000)
