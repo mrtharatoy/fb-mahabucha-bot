@@ -58,7 +58,7 @@ def update_file_list():
                     full_name = item['name'] 
                     key = full_name.rsplit('.', 1)[0].strip().lower()
                     CACHED_FILES[key] = full_name
-            print(f"📂 FILES IN SYSTEM: {list(CACHED_FILES.keys())}")
+            print(f"📂 FILES LOADED: {len(CACHED_FILES)} files ready.")
             return True
         else:
             print(f"⚠️ Failed to fetch list: {r.status_code}")
@@ -72,19 +72,53 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# ==========================================
-# 🕵️‍♂️ METHOD 1: Custom Labels (เพิ่ม fields=name,id)
-# ==========================================
-def check_custom_labels(user_id):
-    print(f"   [Method 1] Scanning Custom Labels API...")
-    url = "https://graph.facebook.com/v16.0/me/custom_labels"
-    
-    # ⭐ จุดแก้ที่ 1: บังคับขอ name และ id ⭐
-    params = {
-        "access_token": PAGE_ACCESS_TOKEN, 
-        "limit": 100,
-        "fields": "name,id" 
+# --- ฟังก์ชันส่งรูป (มาตรฐาน) ---
+def send_image(recipient_id, image_url):
+    print(f"📤 Sending image to {recipient_id}...")
+    params = {"access_token": PAGE_ACCESS_TOKEN}
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "recipient": {"id": recipient_id},
+        "message": {
+            "attachment": {
+                "type": "image",
+                "payload": {"url": image_url, "is_reusable": True}
+            }
+        }
     }
+    # ใช้ Default Version (ไม่ระบุ v เพื่อให้ Facebook จัดการเอง)
+    r = requests.post("https://graph.facebook.com/me/messages", params=params, json=data)
+    if r.status_code != 200:
+        print(f"💥 Send Error: {r.text}")
+
+# ==========================================
+# 1. ระบบพิมพ์หา (Manual Search) - กันเหนียว
+# ==========================================
+def check_text_command(user_id, text):
+    text_clean = text.strip().lower()
+    if text_clean in CACHED_FILES:
+        full_filename = CACHED_FILES[text_clean]
+        print(f"✅ Text Match: '{text}' -> Sending {full_filename}")
+        image_url = get_github_image_url(full_filename)
+        send_image(user_id, image_url)
+        return True
+    return False
+
+# ==========================================
+# 2. ระบบหาป้าย (Auto Tag Search)
+# ==========================================
+def check_labels_auto(user_id):
+    print(f"🔎 Scanning Labels for {user_id}...")
+    
+    # ลองใช้ endpoint 'me/custom_labels' แบบไม่ระบุ version (ใช้ default ของแอพ)
+    url = "https://graph.facebook.com/me/custom_labels"
+    params = {
+        "access_token": PAGE_ACCESS_TOKEN,
+        "limit": 100,
+        "fields": "name,id" # บังคับขอ name
+    }
+    
+    found = False
     
     while True:
         try:
@@ -95,33 +129,44 @@ def check_custom_labels(user_id):
             if not labels: break
 
             for label in labels:
-                # ปริ้นท์ข้อมูลดิบดูเลยว่า Facebook ส่งอะไรมา
-                # print(f"      RAW DATA: {label}") 
+                raw_name = label.get('name', '') # ถ้าไม่มีชื่อ จะได้ ''
                 
-                raw_name = label.get('name', 'NO_NAME')
+                # ถ้าเจอชื่อว่างๆ ให้ข้ามไปเลย
+                if not raw_name: 
+                    continue
+                    
                 clean_name = raw_name.strip().lower()
                 
-                print(f"      - Found Label: '{raw_name}'") 
-                
+                # เช็คว่าชื่อตรงกับไฟล์ไหม
                 if clean_name in CACHED_FILES:
-                    # เจาะดูคน
+                    print(f"   👀 Found Potential Label: {raw_name}")
+                    
+                    # ถ้าชื่อตรง ค่อยเจาะดูคน
                     label_id = label.get('id')
                     if is_user_in_label(label_id, user_id):
-                        return clean_name
+                        full_filename = CACHED_FILES[clean_name]
+                        print(f"   🎉 USER MATCHED TAG: {raw_name} -> Sending Image")
+                        image_url = get_github_image_url(full_filename)
+                        send_image(user_id, image_url)
+                        found = True
+                        return # เจอแล้วจบ
             
             if 'paging' in data and 'next' in data['paging']:
                 url = data['paging']['next']
-                # ⭐ จุดแก้ที่ 2: หน้าถัดไปก็ต้องบังคับขอ name ด้วย ⭐
-                params = {"access_token": PAGE_ACCESS_TOKEN, "fields": "name,id"}
+                params = {"access_token": PAGE_ACCESS_TOKEN} # ใส่ token อย่างเดียวพอในหน้าถัดไป
             else:
                 break
+                
         except Exception as e:
-            print(f"      💥 Method 1 Error: {e}")
+            print(f"💥 Error scanning labels: {e}")
             break
-    return None
+            
+    if not found:
+        print("❌ No matching tags found.")
 
 def is_user_in_label(label_id, user_id):
-    url = f"https://graph.facebook.com/v16.0/{label_id}/users"
+    # เช็คว่า user อยู่ใน label นี้จริงไหม
+    url = f"https://graph.facebook.com/{label_id}/users"
     params = {"access_token": PAGE_ACCESS_TOKEN, "limit": 2000}
     try:
         r = requests.get(url, params)
@@ -132,75 +177,8 @@ def is_user_in_label(label_id, user_id):
     return False
 
 # ==========================================
-# 🕵️‍♂️ METHOD 2: Conversation Tags (เพิ่ม debug)
+# MAIN WEBHOOK
 # ==========================================
-def check_conversation_tags(user_id):
-    print(f"   [Method 2] Scanning Inbox Conversation Tags...")
-    
-    url_conv = f"https://graph.facebook.com/v16.0/me/conversations"
-    params_conv = {
-        "access_token": PAGE_ACCESS_TOKEN,
-        "platform": "MESSENGER",
-        "user_id": user_id
-    }
-    
-    try:
-        r = requests.get(url_conv, params=params_conv)
-        data = r.json()
-        
-        # Debug: ดูว่าหาห้องแชทเจอไหม
-        if 'error' in data:
-            print(f"      ⚠️ Conversation API Error: {data['error']['message']}")
-            
-        if 'data' in data and len(data['data']) > 0:
-            conv_id = data['data'][0]['id']
-            # print(f"      Found Conv ID: {conv_id}")
-            
-            url_tags = f"https://graph.facebook.com/v16.0/{conv_id}"
-            params_tags = {
-                "access_token": PAGE_ACCESS_TOKEN,
-                "fields": "tags"
-            }
-            r_tags = requests.get(url_tags, params=params_tags)
-            tags_data = r_tags.json().get('tags', {}).get('data', [])
-            
-            if not tags_data:
-                print("      (No tags found attached to this conversation)")
-            
-            for tag in tags_data:
-                raw_name = tag.get('name', 'NO_NAME')
-                clean_name = raw_name.strip().lower()
-                print(f"      - Found Chat Tag: '{raw_name}'")
-                
-                if clean_name in CACHED_FILES:
-                    return clean_name 
-        else:
-            print("      ⚠️ Could not find conversation ID for this user (User might be inactive).")
-            
-    except Exception as e:
-        print(f"      💥 Method 2 Error: {e}")
-        
-    return None
-
-# ==========================================
-# MAIN
-# ==========================================
-def master_check_and_send(user_id):
-    print(f"\n🚀 STARTING SEARCH for User: {user_id}")
-    
-    matched_file = check_custom_labels(user_id)
-    
-    if not matched_file:
-        matched_file = check_conversation_tags(user_id)
-        
-    if matched_file:
-        full_filename = CACHED_FILES[matched_file]
-        print(f"🎉 SUCCESS! Match found: '{matched_file}' -> Sending {full_filename}")
-        image_url = get_github_image_url(full_filename)
-        send_image(user_id, image_url)
-    else:
-        print("❌ FAILED. No matching tags found in either system.")
-
 @app.route('/', methods=['GET'])
 def verify():
     if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.challenge"):
@@ -217,24 +195,22 @@ def webhook():
                 for event in entry['messaging']:
                     if event.get('message', {}).get('is_echo'):
                         continue
+                        
                     if 'message' in event:
                         sender_id = event['sender']['id']
-                        master_check_and_send(sender_id)
+                        user_text = event['message'].get('text', '')
+                        
+                        print(f"\n📩 Message from {sender_id}: '{user_text}'")
+                        
+                        # 1. ลองค้นด้วยข้อความที่พิมพ์มาก่อน (Manual)
+                        # ถ้าพิมพ์ตรงรหัส -> ส่งเลย ไม่ต้องรอเช็คป้าย
+                        matched_text = check_text_command(sender_id, user_text)
+                        
+                        # 2. ถ้าข้อความไม่ตรงรหัส -> ค่อยไปสแกนป้าย (Auto)
+                        if not matched_text:
+                            check_labels_auto(sender_id)
+                            
     return "ok", 200
-
-def send_image(recipient_id, image_url):
-    params = {"access_token": PAGE_ACCESS_TOKEN}
-    headers = {"Content-Type": "application/json"}
-    data = {
-        "recipient": {"id": recipient_id},
-        "message": {
-            "attachment": {
-                "type": "image",
-                "payload": {"url": image_url, "is_reusable": True}
-            }
-        }
-    }
-    requests.post("https://graph.facebook.com/v16.0/me/messages", params=params, json=data)
 
 if __name__ == '__main__':
     app.run(port=5000)
