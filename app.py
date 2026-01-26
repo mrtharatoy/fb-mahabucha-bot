@@ -18,22 +18,23 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 CACHED_FILES = {}
 
-# --- ฟังก์ชันตรวจสอบกุญแจ (เก็บไว้ดูความถูกต้อง) ---
+# --- Debug Token ---
 def debug_token_type():
     print("\n🔐 --- TOKEN DEBUGGER ---")
+    # เช็คกุญแจว่าเป็นของใคร
     url = f"https://graph.facebook.com/me?access_token={PAGE_ACCESS_TOKEN}"
     try:
         r = requests.get(url)
         if r.status_code == 200:
             data = r.json()
             name = data.get('name', 'Unknown')
+            # ถ้ามีคำว่า accounts แสดงว่าเป็น User Token (ผิด)
             if 'accounts' in r.text or 'first_name' in r.text: 
-                print(f"❌ WARNING: คุณกำลังใช้ 'User Token' (ชื่อ: {name})")
+                print(f"❌ WARNING: คุณกำลังใช้ 'User Token' (ชื่อ: {name}) -> ใช้ไม่ได้นะ!")
             else:
-                print(f"✅ SUCCESS: คุณกำลังใช้ 'Page Token' (ชื่อ: {name})")
-                print("👉 กุญแจถูกต้อง! ปัญหาอยู่ที่ API Version เดี๋ยวผมแก้ให้...")
+                print(f"✅ SUCCESS: คุณกำลังใช้ 'Page Token' (ชื่อ: {name}) -> ถูกต้อง!")
         else:
-            print(f"⚠️ Token Error: {r.status_code}")
+            print(f"⚠️ Token Error: {r.status_code} (กุญแจอาจจะหมดอายุ)")
     except Exception as e:
         print(f"Error checking token: {e}")
     print("--------------------------\n")
@@ -76,14 +77,14 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันเช็คป้าย (แก้ Version เป็น v16.0 เพื่อความชัวร์) ---
+# --- ฟังก์ชันเช็คป้าย (ใช้ v16.0 แก้ปัญหา name deprecated) ---
 def check_page_labels_for_user(user_id):
-    # ⭐ เปลี่ยนจาก v19.0 -> v16.0 (รุ่นนี้อ่าน name ได้ชัวร์)
+    # ใช้ v16.0 เพราะ v19.0 เลิกให้ดึง name
     url_labels = f"https://graph.facebook.com/v16.0/me/custom_labels"
     params_labels = {
         "access_token": PAGE_ACCESS_TOKEN,
-        # เอา fields ออก ให้มันคืนค่า default มาเอง (เลี่ยง error deprecated)
         "limit": 100
+        # ไม่ต้องระบุ fields มันจะให้ name มาเองโดยอัตโนมัติใน v16.0
     }
     
     try:
@@ -98,6 +99,7 @@ def check_page_labels_for_user(user_id):
                 label_name = label_obj.get('name', '').lower()
                 label_id = label_obj.get('id')
                 
+                # ถ้าชื่อป้าย ตรงกับชื่อไฟล์รูป
                 if label_name in CACHED_FILES:
                     # เจาะดูคนในป้าย (ใช้ v16.0 เหมือนกัน)
                     url_users = f"https://graph.facebook.com/v16.0/{label_id}/users"
@@ -162,6 +164,7 @@ def send_image(recipient_id, image_url):
             }
         }
     }
+    # ใช้ v16.0 ส่งข้อความด้วยเพื่อความชัวร์
     requests.post("https://graph.facebook.com/v16.0/me/messages", params=params, json=data)
 
 if __name__ == '__main__':
