@@ -28,9 +28,9 @@ def debug_token_type():
             data = r.json()
             name = data.get('name', 'Unknown')
             if 'accounts' in r.text or 'first_name' in r.text: 
-                print(f"❌ WARNING: User Token (ชื่อ: {name}) -> ใช้ไม่ได้!")
+                print(f"❌ WARNING: User Token ({name}) -> ใช้ไม่ได้!")
             else:
-                print(f"✅ SUCCESS: Page Token (ชื่อ: {name}) -> ใช้ได้แน่นอน!")
+                print(f"✅ SUCCESS: Page Token ({name}) -> ถูกต้อง!")
         else:
             print(f"⚠️ Token Error: {r.status_code}")
     except Exception as e:
@@ -59,7 +59,8 @@ def update_file_list():
             for item in data:
                 if item['type'] == 'file':
                     full_name = item['name'] 
-                    key = full_name.rsplit('.', 1)[0].lower()
+                    # ตัดช่องว่าง + ตัวเล็ก
+                    key = full_name.rsplit('.', 1)[0].strip().lower()
                     CACHED_FILES[key] = full_name
             print(f"📚 Updated! Found {len(CACHED_FILES)} files: {list(CACHED_FILES.keys())}")
             return True
@@ -75,48 +76,54 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันดึงป้าย (สูตร v16.0 + Pagination) ---
+# --- ฟังก์ชันดึงป้าย (Spy Mode + Auto Trim) ---
 def get_all_relevant_labels():
     relevant_labels = []
-    
-    # ⭐ ใช้ v16.0 เท่านั้น (v19.0 จะ Error)
     url = "https://graph.facebook.com/v16.0/me/custom_labels"
-    
-    # params ตั้งต้น
     params = {
         "access_token": PAGE_ACCESS_TOKEN,
         "limit": 100,
-        # v16.0 ไม่ต้องระบุ fields name ก็ได้ หรือถ้าใส่ก็ไม่ error
     }
     
-    print("🔎 Scanning ALL labels (API v16.0 + Turning Pages)...")
+    print("🔎 Scanning ALL labels (Showing everything)...")
     
+    page_count = 1
     while True:
         try:
+            print(f"   📖 Reading Page {page_count}...")
             r = requests.get(url, params=params)
             
-            # ถ้า Error ให้ break
             if r.status_code != 200:
-                print(f"⚠️ Error fetching labels page: {r.status_code} - {r.text}")
+                print(f"⚠️ Error fetching labels: {r.status_code} - {r.text}")
                 break
                 
             data = r.json()
             labels = data.get('data', [])
             
-            # กรองป้าย
-            for label in labels:
-                label_name = label.get('name', '').lower()
-                if label_name in CACHED_FILES:
-                    relevant_labels.append(label)
-                    print(f"   👉 FOUND TARGET LABEL: {label['name']} (ID: {label['id']})")
+            if not labels:
+                print("   (This page is empty)")
             
-            # พลิกหน้า (Pagination)
+            for label in labels:
+                raw_name = label.get('name', '')
+                # ⭐ แก้ไขจุดตาย: ตัดช่องว่างหน้าหลังทิ้ง (.strip) ⭐
+                clean_name = raw_name.strip().lower()
+                
+                # ปริ้นท์ให้เห็นกับตาว่าบอทเห็นอะไร
+                # print(f"   👀 Saw: '{raw_name}' -> Clean: '{clean_name}'") 
+                
+                if clean_name in CACHED_FILES:
+                    relevant_labels.append(label)
+                    print(f"   👉 MATCH FOUND!: '{raw_name}' matches file '{clean_name}'")
+                # else:
+                    # ถ้าอยากเห็นว่าอันไหนไม่ตรง ให้เปิดบรรทัดนี้
+                    # print(f"      Mismatch: '{clean_name}' not in file list.")
+
             if 'paging' in data and 'next' in data['paging']:
                 url = data['paging']['next']
-                # สำคัญ: url 'next' ต้องเติม token ใหม่เสมอ
                 params = {"access_token": PAGE_ACCESS_TOKEN}
+                page_count += 1
             else:
-                break # หมดหน้าแล้ว
+                break 
                 
         except Exception as e:
             print(f"💥 Error in pagination: {e}")
@@ -126,27 +133,25 @@ def get_all_relevant_labels():
     return relevant_labels
 
 def check_page_labels_for_user(user_id):
-    # 1. หาป้ายเป้าหมาย (ด้วย v16.0 + Pagination)
     target_labels = get_all_relevant_labels()
     
     if not target_labels:
-        print("❌ No labels match our file list.")
+        print("❌ No labels match our file list. (Check exact spelling/spaces)")
         return
 
     found_any = False
     
-    # 2. เจาะดูคนในป้าย
     for label_obj in target_labels:
-        label_name = label_obj.get('name', '').lower()
+        # ตัดช่องว่างอีกทีเพื่อความชัวร์
+        clean_name = label_obj.get('name', '').strip().lower()
         label_id = label_obj.get('id')
         
-        print(f"🧐 Checking inside label '{label_name}'...")
+        print(f"🧐 Checking inside label '{clean_name}'...")
         
-        # ใช้ v16.0 เจาะดูคน
         url_users = f"https://graph.facebook.com/v16.0/{label_id}/users"
         params_users = {
             "access_token": PAGE_ACCESS_TOKEN,
-            "limit": 5000 # ดึงมาเยอะๆ
+            "limit": 5000
         }
         
         try:
@@ -155,17 +160,19 @@ def check_page_labels_for_user(user_id):
                 users_data = r_users.json().get('data', [])
                 user_ids = [u['id'] for u in users_data]
                 
+                # Debug: ปริ้นท์ ID ของคนในป้ายออกมาดู
+                # print(f"   People inside: {user_ids}") 
+                
                 if user_id in user_ids:
-                    full_filename = CACHED_FILES[label_name]
-                    print(f"🎉 BINGO! User {user_id} found in tag '{label_name}'")
-                    print(f"📤 Sending image: {full_filename}")
+                    full_filename = CACHED_FILES[clean_name]
+                    print(f"🎉 BINGO! User {user_id} IS in tag '{clean_name}'")
                     
                     image_url = get_github_image_url(full_filename)
                     send_image(user_id, image_url)
                     found_any = True
                     break 
                 else:
-                    print(f"   User not in this label.")
+                    print(f"   User {user_id} is NOT in this label.")
             else:
                 print(f"⚠️ Failed to check users: {r_users.status_code}")
                 
@@ -173,7 +180,7 @@ def check_page_labels_for_user(user_id):
             print(f"💥 Error checking users: {e}")
 
     if not found_any:
-        print("❌ User checked against labels, but not found.")
+        print("❌ User checked against matching labels, but is not in the list.")
 
 @app.route('/', methods=['GET'])
 def verify():
@@ -209,7 +216,6 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    # ใช้ v16.0 ส่งข้อความ
     requests.post("https://graph.facebook.com/v16.0/me/messages", params=params, json=data)
 
 if __name__ == '__main__':
