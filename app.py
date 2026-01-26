@@ -1,6 +1,5 @@
 import os
 import requests
-import json
 from flask import Flask, request
 
 app = Flask(__name__)
@@ -14,34 +13,34 @@ FOLDER_NAME = "images"
 
 PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
-# ดึง GitHub Token จาก Environment (เดี๋ยวเราไปใส่ใน Render)
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN') 
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN') # <-- บรรทัดนี้สำคัญมาก
 
 CACHED_FILES = []
 
 def update_file_list():
-    """ฟังก์ชันวิ่งไปดูรายชื่อไฟล์ทั้งหมดใน GitHub (แบบมีบัตรผ่าน)"""
+    """โหลดรายชื่อไฟล์จาก GitHub แบบมีบัตรผ่าน (แก้ 403 Rate Limit)"""
     global CACHED_FILES
     print("🔄 Updating file list from GitHub...")
     api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{FOLDER_NAME}?ref={BRANCH}"
     
-    # ใส่บัตรผ่าน (Headers) เพื่อไม่ให้ GitHub บล็อก
+    # ใส่บัตรผ่าน (Headers) เพื่อขอโควต้าพิเศษ
     headers = {
         "User-Agent": "FB-Mahabucha-Bot",
         "Accept": "application/vnd.github.v3+json"
     }
-    # ถ้ามี Token ให้ใส่ไปด้วย (แก้ Error 403)
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
+        print("🎫 Using GitHub Token for authentication.")
     
     try:
         r = requests.get(api_url, headers=headers)
         if r.status_code == 200:
             data = r.json()
             CACHED_FILES = [item['name'].rsplit('.', 1)[0] for item in data if item['type'] == 'file']
-            print(f"📚 Updated! Now have {len(CACHED_FILES)} files: {CACHED_FILES}")
+            print(f"📚 Updated! Found {len(CACHED_FILES)} files.")
             return True
         else:
+            # ถ้ายัง Error จะปริ้นออกมาดูว่าเพราะอะไร
             print(f"⚠️ Failed to fetch list: {r.status_code} - {r.text}")
             return False
     except Exception as e:
@@ -52,7 +51,6 @@ def update_file_list():
 update_file_list()
 
 def get_github_image_url(filename_without_ext):
-    # เดานามสกุลว่าเป็น .jpg ไว้ก่อน
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename_without_ext}.jpg"
 
 def find_and_send_images(sender_id, text, file_list):
@@ -85,12 +83,12 @@ def webhook():
                         text = event['message']['text']
                         print(f"📩 User Said: '{text}'")
                         
-                        # รอบที่ 1: ลองหาจากความจำเดิม
+                        # ลองหาจากความจำเดิม
                         found = find_and_send_images(sender_id, text, CACHED_FILES)
                         
-                        # ถ้าไม่เจอ -> ลองโหลดรายชื่อใหม่ (เผื่อมีรูปเพิ่ม)
+                        # ถ้าไม่เจอ -> ลองโหลดใหม่ (เผื่อมีรูปเพิ่ม)
                         if found == 0:
-                            print("🤔 Not found. Fetching new list with Token...")
+                            print("🤔 Not found. Fetching new list...")
                             success = update_file_list()
                             if success:
                                 find_and_send_images(sender_id, text, CACHED_FILES)
