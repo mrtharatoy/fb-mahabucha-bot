@@ -56,46 +56,58 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันเช็คป้ายกำกับ (Label) แบบตรงไปตรงมา ---
-def check_user_labels_and_send_image(user_id):
-    # ใช้ API v19.0 ล่าสุด
-    url = f"https://graph.facebook.com/v19.0/{user_id}/custom_labels"
+# --- ฟังก์ชันใหม่: ดึง Tag จาก 'เพจ' แทนดึงจาก 'ลูกค้า' (แก้ Error 400) ---
+def check_page_labels_for_user(user_id):
+    """
+    1. ดึงป้ายกำกับทั้งหมดของเพจ พร้อมรายชื่อคนในป้ายนั้น
+    2. เช็คว่า user_id ของเรา ไปโผล่อยู่ในป้ายไหนบ้าง
+    """
+    # API: ขอป้ายทั้งหมด (name) และขอรายชื่อคนในป้าย (users)
+    url = f"https://graph.facebook.com/v19.0/me/custom_labels"
     params = {
         "access_token": PAGE_ACCESS_TOKEN,
-        "fields": "name"
+        "fields": "name,users", 
+        "limit": 100 # ดึงมาทีละ 100 ป้าย (ถ้ามีเยอะกว่านี้อาจต้องวนลูปเพิ่ม)
     }
     
     try:
         r = requests.get(url, params=params)
-        
         if r.status_code == 200:
             data = r.json()
-            labels = data.get('data', [])
+            labels_data = data.get('data', [])
             
-            print(f"🧐 User {user_id} has labels: {labels}")
+            print(f"🧐 Scanning {len(labels_data)} labels from Page...")
             
             found_any = False
-            for label_obj in labels:
-                tag_name = label_obj['name'].lower()
+            
+            # วนดูทุกป้ายในเพจ
+            for label_obj in labels_data:
+                label_name = label_obj.get('name', '').lower()
                 
-                # เช็คว่าชื่อป้าย ตรงกับชื่อไฟล์รูปไหม
-                if tag_name in CACHED_FILES:
-                    full_filename = CACHED_FILES[tag_name]
-                    print(f"✅ Match! Label: {tag_name} -> File: {full_filename}")
+                # ถ้าป้ายนี้ชื่อตรงกับไฟล์รูปที่เรามี
+                if label_name in CACHED_FILES:
+                    # เช็คว่าลูกค้าคนนี้ (user_id) อยู่ในป้ายนี้ไหม?
+                    users_in_label = label_obj.get('users', {}).get('data', [])
                     
-                    image_url = get_github_image_url(full_filename)
-                    send_image(user_id, image_url)
-                    found_any = True
+                    # แปลง list ของ users ให้เป็น list ของ id ล้วนๆ เพื่อเช็คง่ายๆ
+                    user_ids_in_label = [u['id'] for u in users_in_label]
+                    
+                    if user_id in user_ids_in_label:
+                        full_filename = CACHED_FILES[label_name]
+                        print(f"✅ Match Found! User is in label '{label_name}' -> File: {full_filename}")
+                        
+                        image_url = get_github_image_url(full_filename)
+                        send_image(user_id, image_url)
+                        found_any = True
             
             if not found_any:
-                print("❌ No matching labels found for this user.")
+                print("❌ User not found in any matching labels.")
                 
         else:
-            # ปริ้นท์ Error ชัดๆ ถ้าสิทธิ์ยังไม่ครบ
-            print(f"⚠️ Error fetching labels: {r.status_code} - {r.text}")
+            print(f"⚠️ Error fetching page labels: {r.status_code} - {r.text}")
             
     except Exception as e:
-        print(f"💥 Exception in label check: {e}")
+        print(f"💥 Exception checking labels: {e}")
 
 
 @app.route('/', methods=['GET'])
@@ -111,18 +123,17 @@ def webhook():
     if data['object'] == 'page':
         for entry in data['entry']:
             for event in entry['messaging']:
-                # 1. เช็คว่าเป็นข้อความจริงๆ ไหม (ไม่ใช่ Echo ที่เพจตอบเอง)
-                # เพราะคุณเปิด message_echoes ไว้ เราต้องดักทางไม่ให้บอทคุยกับตัวเอง
+                # ป้องกัน Echo (คุยกับตัวเอง)
                 if event.get('message', {}).get('is_echo'):
-                    print("This is an echo message. Ignoring.")
+                    print("Ignored echo.")
                     continue
 
                 if 'message' in event:
                     sender_id = event['sender']['id']
-                    print(f"📩 New message from {sender_id}. Checking labels...")
+                    print(f"📩 Message from {sender_id}. Checking Page Labels...")
                     
-                    # เช็คป้ายกำกับทันที
-                    check_user_labels_and_send_image(sender_id)
+                    # ใช้ฟังก์ชันใหม่ที่เข้าทางประตูหลัง
+                    check_page_labels_for_user(sender_id)
 
     return "ok", 200
 
