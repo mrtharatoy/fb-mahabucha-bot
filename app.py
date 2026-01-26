@@ -38,7 +38,8 @@ def update_file_list():
             CACHED_FILES.clear()
             for item in data:
                 if item['type'] == 'file':
-                    full_name = item['name'] 
+                    full_name = item['name']
+                    # เก็บชื่อไฟล์เป็นตัวเล็ก ตัดนามสกุล
                     key = full_name.rsplit('.', 1)[0].lower()
                     CACHED_FILES[key] = full_name
             print(f"📚 Updated! Found {len(CACHED_FILES)} files.")
@@ -56,47 +57,68 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันใหม่: ดึง Tag (Label) ของลูกค้าจาก Facebook ---
+# --- ฟังก์ชันใหม่: ดึง Tag ผ่านห้องแชท (Conversation API) ---
 def check_user_labels_and_send_image(user_id):
     """
-    1. ถาม Facebook ว่าลูกค้าคนนี้มี Label (Tag) อะไรบ้าง
-    2. ถ้าชื่อ Label ตรงกับชื่อไฟล์รูป -> ส่งรูปนั้น
+    1. หา ID ห้องแชท (Conversation ID) ของลูกค้าคนนี้ก่อน
+    2. เข้าไปดูในห้องแชทว่ามี tags (ป้ายกำกับ) อะไรบ้าง
     """
-    # API สำหรับดึง Custom Labels
-    url = f"https://graph.facebook.com/v18.0/{user_id}/custom_labels"
-    params = {
+    
+    # 1. หา Conversation ID
+    conv_url = f"https://graph.facebook.com/v18.0/me/conversations"
+    conv_params = {
         "access_token": PAGE_ACCESS_TOKEN,
-        "fields": "name" # เอาแค่ชื่อป้าย
+        "user_id": user_id,
+        "platform": "MESSENGER"
     }
     
     try:
-        r = requests.get(url, params=params)
+        r = requests.get(conv_url, params=conv_params)
         if r.status_code == 200:
             data = r.json()
-            labels = data.get('data', [])
-            
-            print(f"🧐 Checking labels for User {user_id}: {labels}")
-            
-            found_any = False
-            # วนลูปดู Tag ทั้งหมดที่ลูกค้ามี
-            for label_obj in labels:
-                tag_name = label_obj['name'].lower() # แปลงเป็นตัวเล็กเพื่อเทียบ
+            if 'data' in data and len(data['data']) > 0:
+                conversation_id = data['data'][0]['id']
+                print(f"🔍 Found Conversation ID: {conversation_id}")
                 
-                # เช็คว่า Tag นี้ มีชื่อตรงกับไฟล์รูปเราไหม?
-                if tag_name in CACHED_FILES:
-                    full_filename = CACHED_FILES[tag_name]
-                    print(f"✅ Match Found! Tag: {tag_name} -> File: {full_filename}")
+                # 2. เอา Conversation ID ไปถามหา Tags
+                tags_url = f"https://graph.facebook.com/v18.0/{conversation_id}"
+                tags_params = {
+                    "access_token": PAGE_ACCESS_TOKEN,
+                    "fields": "tags" # ขอข้อมูล tags
+                }
+                
+                r_tags = requests.get(tags_url, params=tags_params)
+                if r_tags.status_code == 200:
+                    tags_data = r_tags.json()
                     
-                    # ส่งรูป
-                    image_url = get_github_image_url(full_filename)
-                    send_image(user_id, image_url)
-                    found_any = True
-            
-            if not found_any:
-                print("❌ User has tags, but none match our images.")
-                
+                    # เช็คว่ามี tags ไหม
+                    if 'tags' in tags_data and 'data' in tags_data['tags']:
+                        labels = tags_data['tags']['data']
+                        print(f"🏷️ Found Labels: {labels}")
+                        
+                        found_any = False
+                        for label in labels:
+                            tag_name = label['name'].lower()
+                            
+                            # เทียบกับชื่อไฟล์ที่เรามี
+                            if tag_name in CACHED_FILES:
+                                full_filename = CACHED_FILES[tag_name]
+                                print(f"✅ Match Found! Tag: {tag_name} -> File: {full_filename}")
+                                image_url = get_github_image_url(full_filename)
+                                send_image(user_id, image_url)
+                                found_any = True
+                        
+                        if not found_any:
+                            print("❌ User has tags, but no matching images.")
+                    else:
+                        print("❌ No tags found in this conversation.")
+                else:
+                    print(f"⚠️ Error fetching tags: {r_tags.text}")
+            else:
+                print("❌ Could not find conversation for this user.")
         else:
-            print(f"⚠️ Could not fetch labels: {r.status_code} - {r.text}")
+            print(f"⚠️ Error finding conversation: {r.status_code} - {r.text}")
+            
     except Exception as e:
         print(f"💥 Error checking labels: {e}")
 
@@ -117,17 +139,8 @@ def webhook():
                 if 'message' in event:
                     sender_id = event['sender']['id']
                     
-                    # เมื่อมีข้อความเข้ามา (ไม่ว่าจะพิมพ์ว่าอะไร)
-                    # เราจะไปเช็ค Tag ของลูกค้าก่อนเสมอ
-                    print(f"📩 New message from {sender_id}. Checking tags...")
+                    print(f"📩 Message from {sender_id}. Checking tags...")
                     check_user_labels_and_send_image(sender_id)
-                    
-                    # (Optional) ถ้าอยากให้พิมพ์รหัสแล้วขึ้นรูปด้วย เหมือนเดิม ก็เปิดส่วนนี้ไว้
-                    # ถ้าไม่อยากให้พิมพ์หาแล้ว ก็ลบส่วนข้างล่างนี้ทิ้งได้ครับ
-                    if 'text' in event['message']:
-                         text = event['message']['text']
-                         # โค้ดค้นหาจากข้อความแบบเดิม (ถ้าต้องการ)
-                         # find_and_send_images(sender_id, text) 
 
     return "ok", 200
 
