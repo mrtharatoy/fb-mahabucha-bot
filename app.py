@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from flask import Flask, request
 
 app = Flask(__name__)
@@ -13,55 +14,70 @@ FOLDER_NAME = "images"
 
 PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN') # <-- บรรทัดนี้สำคัญมาก
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
-CACHED_FILES = []
+# เปลี่ยนวิธีเก็บข้อมูล: เก็บเป็นคู่ { 'รหัส(ตัวเล็ก)': 'ชื่อไฟล์เต็มๆ' }
+# เช่น { '999aa01': '999AA01.JPG' }
+CACHED_FILES = {}
 
 def update_file_list():
-    """โหลดรายชื่อไฟล์จาก GitHub แบบมีบัตรผ่าน (แก้ 403 Rate Limit)"""
+    """โหลดรายชื่อไฟล์และจำนามสกุลที่ถูกต้อง"""
     global CACHED_FILES
     print("🔄 Updating file list from GitHub...")
-    api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{FOLDER_NAME}?ref={BRANCH}"
+    api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/{contents}/{FOLDER_NAME}?ref={BRANCH}"
     
-    # ใส่บัตรผ่าน (Headers) เพื่อขอโควต้าพิเศษ
+    # แก้ไข URL api ให้ถูกต้อง (เอา /contents/ ใส่คืนให้)
+    api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{FOLDER_NAME}?ref={BRANCH}"
+
     headers = {
         "User-Agent": "FB-Mahabucha-Bot",
         "Accept": "application/vnd.github.v3+json"
     }
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
-        print("🎫 Using GitHub Token for authentication.")
     
     try:
         r = requests.get(api_url, headers=headers)
         if r.status_code == 200:
             data = r.json()
-            CACHED_FILES = [item['name'].rsplit('.', 1)[0] for item in data if item['type'] == 'file']
+            CACHED_FILES.clear() # ล้างของเก่า
+            
+            for item in data:
+                if item['type'] == 'file':
+                    full_name = item['name'] # ชื่อไฟล์จริง เช่น 999AA01.JPG
+                    # สร้างกุญแจสำหรับค้นหา (ตัดนามสกุลทิ้ง + ทำเป็นตัวเล็ก)
+                    key = full_name.rsplit('.', 1)[0].lower()
+                    CACHED_FILES[key] = full_name
+            
             print(f"📚 Updated! Found {len(CACHED_FILES)} files.")
+            # print(f"   Debug List: {CACHED_FILES}") # เปิดดูถ้าอยากเห็นรายการ
             return True
         else:
-            # ถ้ายัง Error จะปริ้นออกมาดูว่าเพราะอะไร
             print(f"⚠️ Failed to fetch list: {r.status_code} - {r.text}")
             return False
     except Exception as e:
         print(f"❌ Error updating file list: {e}")
         return False
 
-# โหลดครั้งแรกตอนเปิด Server
+# โหลดครั้งแรก
 update_file_list()
 
-def get_github_image_url(filename_without_ext):
-    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename_without_ext}.jpg"
+def get_github_image_url(full_filename):
+    # สร้างลิงก์จากชื่อไฟล์จริงๆ (รวมนามสกุล)
+    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-def find_and_send_images(sender_id, text, file_list):
+def find_and_send_images(sender_id, text):
     user_text_lower = text.lower()
     found_count = 0
-    for filename in file_list:
-        if filename.lower() in user_text_lower:
-            print(f"✅ Found Keyword: {filename}")
-            image_url = get_github_image_url(filename) 
+    
+    # วนลูปเช็คจาก Dictionary โดยตรง
+    for key, full_filename in CACHED_FILES.items():
+        if key in user_text_lower:
+            print(f"✅ Found Keyword: {key} -> File: {full_filename}")
+            image_url = get_github_image_url(full_filename) 
             send_image(sender_id, image_url)
             found_count += 1
+            
     return found_count
 
 @app.route('/', methods=['GET'])
@@ -83,17 +99,15 @@ def webhook():
                         text = event['message']['text']
                         print(f"📩 User Said: '{text}'")
                         
-                        # ลองหาจากความจำเดิม
-                        found = find_and_send_images(sender_id, text, CACHED_FILES)
+                        found = find_and_send_images(sender_id, text)
                         
-                        # ถ้าไม่เจอ -> ลองโหลดใหม่ (เผื่อมีรูปเพิ่ม)
                         if found == 0:
                             print("🤔 Not found. Fetching new list...")
                             success = update_file_list()
                             if success:
-                                find_and_send_images(sender_id, text, CACHED_FILES)
+                                find_and_send_images(sender_id, text)
                             else:
-                                print("❌ Still failing to fetch list (Check Token).")
+                                print("❌ Still failing to fetch list.")
 
     return "ok", 200
 
@@ -109,7 +123,13 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
+    # เพิ่มการปริ้นท์ผลลัพธ์จาก Facebook เพื่อดู Error
+    r = requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
+    if r.status_code != 200:
+        print(f"💥 Facebook Error: {r.status_code}")
+        print(f"   Response: {r.text}")
+    else:
+        print(f"📤 Sent to FB successfully: {image_url}")
 
 if __name__ == '__main__':
     app.run(port=5000)
