@@ -73,12 +73,18 @@ def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
 # ==========================================
-# 🕵️‍♂️ METHOD 1: หาจาก Custom Labels (คนในป้าย)
+# 🕵️‍♂️ METHOD 1: Custom Labels (เพิ่ม fields=name,id)
 # ==========================================
 def check_custom_labels(user_id):
     print(f"   [Method 1] Scanning Custom Labels API...")
     url = "https://graph.facebook.com/v16.0/me/custom_labels"
-    params = {"access_token": PAGE_ACCESS_TOKEN, "limit": 100}
+    
+    # ⭐ จุดแก้ที่ 1: บังคับขอ name และ id ⭐
+    params = {
+        "access_token": PAGE_ACCESS_TOKEN, 
+        "limit": 100,
+        "fields": "name,id" 
+    }
     
     while True:
         try:
@@ -89,21 +95,24 @@ def check_custom_labels(user_id):
             if not labels: break
 
             for label in labels:
-                raw_name = label.get('name', '')
+                # ปริ้นท์ข้อมูลดิบดูเลยว่า Facebook ส่งอะไรมา
+                # print(f"      RAW DATA: {label}") 
+                
+                raw_name = label.get('name', 'NO_NAME')
                 clean_name = raw_name.strip().lower()
                 
-                # ⭐ ปริ้นท์ชื่อป้ายออกมาให้เห็นชัดๆ ⭐
                 print(f"      - Found Label: '{raw_name}'") 
                 
                 if clean_name in CACHED_FILES:
                     # เจาะดูคน
                     label_id = label.get('id')
                     if is_user_in_label(label_id, user_id):
-                        return clean_name # เจอแล้ว! ส่งชื่อไฟล์กลับไป
+                        return clean_name
             
             if 'paging' in data and 'next' in data['paging']:
                 url = data['paging']['next']
-                params = {"access_token": PAGE_ACCESS_TOKEN}
+                # ⭐ จุดแก้ที่ 2: หน้าถัดไปก็ต้องบังคับขอ name ด้วย ⭐
+                params = {"access_token": PAGE_ACCESS_TOKEN, "fields": "name,id"}
             else:
                 break
         except Exception as e:
@@ -123,12 +132,11 @@ def is_user_in_label(label_id, user_id):
     return False
 
 # ==========================================
-# 🕵️‍♂️ METHOD 2: หาจาก Conversation Tags (ป้ายที่แปะบนแชท)
+# 🕵️‍♂️ METHOD 2: Conversation Tags (เพิ่ม debug)
 # ==========================================
 def check_conversation_tags(user_id):
-    print(f"   [Method 2] Scanning Conversation Tags (Inbox Labels)...")
+    print(f"   [Method 2] Scanning Inbox Conversation Tags...")
     
-    # 1. หา Conversation ID ของคนนี้ก่อน
     url_conv = f"https://graph.facebook.com/v16.0/me/conversations"
     params_conv = {
         "access_token": PAGE_ACCESS_TOKEN,
@@ -139,11 +147,15 @@ def check_conversation_tags(user_id):
     try:
         r = requests.get(url_conv, params=params_conv)
         data = r.json()
+        
+        # Debug: ดูว่าหาห้องแชทเจอไหม
+        if 'error' in data:
+            print(f"      ⚠️ Conversation API Error: {data['error']['message']}")
+            
         if 'data' in data and len(data['data']) > 0:
             conv_id = data['data'][0]['id']
             # print(f"      Found Conv ID: {conv_id}")
             
-            # 2. เจาะดู Tags ในแชทนี้
             url_tags = f"https://graph.facebook.com/v16.0/{conv_id}"
             params_tags = {
                 "access_token": PAGE_ACCESS_TOKEN,
@@ -152,15 +164,18 @@ def check_conversation_tags(user_id):
             r_tags = requests.get(url_tags, params=params_tags)
             tags_data = r_tags.json().get('tags', {}).get('data', [])
             
+            if not tags_data:
+                print("      (No tags found attached to this conversation)")
+            
             for tag in tags_data:
-                raw_name = tag.get('name', '')
+                raw_name = tag.get('name', 'NO_NAME')
                 clean_name = raw_name.strip().lower()
                 print(f"      - Found Chat Tag: '{raw_name}'")
                 
                 if clean_name in CACHED_FILES:
-                    return clean_name # เจอแล้ว!
+                    return clean_name 
         else:
-            print("      ⚠️ Could not find conversation for this user.")
+            print("      ⚠️ Could not find conversation ID for this user (User might be inactive).")
             
     except Exception as e:
         print(f"      💥 Method 2 Error: {e}")
@@ -168,27 +183,23 @@ def check_conversation_tags(user_id):
     return None
 
 # ==========================================
-# 🧠 MAIN CHECK FUNCTION
+# MAIN
 # ==========================================
 def master_check_and_send(user_id):
-    print(f"\n🚀 STARTING DOUBLE SEARCH for User: {user_id}")
+    print(f"\n🚀 STARTING SEARCH for User: {user_id}")
     
-    # ลองวิธีที่ 1
     matched_file = check_custom_labels(user_id)
     
-    # ถ้าวิธีที่ 1 ไม่เจอ -> ลองวิธีที่ 2
     if not matched_file:
         matched_file = check_conversation_tags(user_id)
         
-    # สรุปผล
     if matched_file:
         full_filename = CACHED_FILES[matched_file]
         print(f"🎉 SUCCESS! Match found: '{matched_file}' -> Sending {full_filename}")
         image_url = get_github_image_url(full_filename)
         send_image(user_id, image_url)
     else:
-        print("❌ FAILED. Checked both systems but found no matching tags.")
-        print("   (Please check the list of 'Found Label' above to see what the bot actually sees)")
+        print("❌ FAILED. No matching tags found in either system.")
 
 @app.route('/', methods=['GET'])
 def verify():
