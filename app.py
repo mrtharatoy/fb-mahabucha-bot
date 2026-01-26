@@ -56,18 +56,13 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันใหม่: ดึง Tag จาก 'เพจ' แทนดึงจาก 'ลูกค้า' (แก้ Error 400) ---
+# --- ฟังก์ชันเช็ค Tag จาก 'เพจ' (Reverse Lookup) ---
 def check_page_labels_for_user(user_id):
-    """
-    1. ดึงป้ายกำกับทั้งหมดของเพจ พร้อมรายชื่อคนในป้ายนั้น
-    2. เช็คว่า user_id ของเรา ไปโผล่อยู่ในป้ายไหนบ้าง
-    """
-    # API: ขอป้ายทั้งหมด (name) และขอรายชื่อคนในป้าย (users)
     url = f"https://graph.facebook.com/v19.0/me/custom_labels"
     params = {
         "access_token": PAGE_ACCESS_TOKEN,
         "fields": "name,users", 
-        "limit": 100 # ดึงมาทีละ 100 ป้าย (ถ้ามีเยอะกว่านี้อาจต้องวนลูปเพิ่ม)
+        "limit": 100
     }
     
     try:
@@ -80,16 +75,11 @@ def check_page_labels_for_user(user_id):
             
             found_any = False
             
-            # วนดูทุกป้ายในเพจ
             for label_obj in labels_data:
                 label_name = label_obj.get('name', '').lower()
                 
-                # ถ้าป้ายนี้ชื่อตรงกับไฟล์รูปที่เรามี
                 if label_name in CACHED_FILES:
-                    # เช็คว่าลูกค้าคนนี้ (user_id) อยู่ในป้ายนี้ไหม?
                     users_in_label = label_obj.get('users', {}).get('data', [])
-                    
-                    # แปลง list ของ users ให้เป็น list ของ id ล้วนๆ เพื่อเช็คง่ายๆ
                     user_ids_in_label = [u['id'] for u in users_in_label]
                     
                     if user_id in user_ids_in_label:
@@ -122,18 +112,28 @@ def webhook():
     data = request.json
     if data['object'] == 'page':
         for entry in data['entry']:
-            for event in entry['messaging']:
-                # ป้องกัน Echo (คุยกับตัวเอง)
-                if event.get('message', {}).get('is_echo'):
-                    print("Ignored echo.")
-                    continue
+            
+            # --- จุดที่แก้: เช็คก่อนว่ามี 'messaging' ไหม ---
+            if 'messaging' in entry:
+                for event in entry['messaging']:
+                    # ป้องกัน Echo
+                    if event.get('message', {}).get('is_echo'):
+                        print("Ignored echo.")
+                        continue
 
-                if 'message' in event:
-                    sender_id = event['sender']['id']
-                    print(f"📩 Message from {sender_id}. Checking Page Labels...")
-                    
-                    # ใช้ฟังก์ชันใหม่ที่เข้าทางประตูหลัง
-                    check_page_labels_for_user(sender_id)
+                    if 'message' in event:
+                        sender_id = event['sender']['id']
+                        print(f"📩 Message from {sender_id}. Checking Page Labels...")
+                        
+                        # เรียกฟังก์ชันเช็คป้าย
+                        check_page_labels_for_user(sender_id)
+            
+            # (Optional) ถ้าเป็น Standby (กรณีใช้ร่วมกับบอทตัวอื่น)
+            elif 'standby' in entry:
+                print("Received standby event. Ignoring.")
+            
+            else:
+                print(f"Received unknown event type: {entry.keys()}")
 
     return "ok", 200
 
