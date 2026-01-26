@@ -85,11 +85,11 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    # ใช้ Default Version
-    requests.post("https://graph.facebook.com/me/messages", params=params, json=data)
+    # ใช้ v24.0 ตามที่คุณมี
+    requests.post("https://graph.facebook.com/v24.0/me/messages", params=params, json=data)
 
 # ==========================================
-# 1. ระบบพิมพ์หา (Manual Search) - Working!
+# 1. ระบบพิมพ์หา (Manual Search)
 # ==========================================
 def check_text_command(user_id, text):
     text_clean = text.strip().lower()
@@ -102,11 +102,11 @@ def check_text_command(user_id, text):
     return False
 
 # ==========================================
-# 2. ระบบหาป้าย (Deep Fetch Fix)
+# 2. ระบบหาป้าย (Deep Fetch V24.0)
 # ==========================================
 def fetch_label_name_by_id(label_id):
-    """ฟังก์ชันเจาะชื่อป้าย (กรณีได้ชื่อว่างมา)"""
-    url = f"https://graph.facebook.com/{label_id}"
+    """เจาะถามชื่อป้ายด้วย ID (แก้ปัญหาชื่อว่าง)"""
+    url = f"https://graph.facebook.com/v24.0/{label_id}" # ใช้ v24.0
     params = {
         "access_token": PAGE_ACCESS_TOKEN,
         "fields": "name"
@@ -114,16 +114,17 @@ def fetch_label_name_by_id(label_id):
     try:
         r = requests.get(url, params=params)
         if r.status_code == 200:
-            return r.json().get('name', '')
+            name = r.json().get('name', '')
+            # print(f"      (Deep Fetch Result: ID {label_id} = '{name}')")
+            return name
     except:
         pass
     return ''
 
 def check_labels_auto(user_id):
-    print(f"🔎 Scanning Labels for {user_id}...")
+    print(f"🔎 Scanning Labels for {user_id}...") # บรรทัดนี้ต้องขึ้นแน่นอน
     
-    # ดึงป้ายทั้งหมดมาก่อน
-    url = "https://graph.facebook.com/me/custom_labels"
+    url = "https://graph.facebook.com/v24.0/me/custom_labels"
     params = {
         "access_token": PAGE_ACCESS_TOKEN,
         "limit": 100,
@@ -144,31 +145,25 @@ def check_labels_auto(user_id):
                 raw_name = label.get('name', '')
                 label_id = label.get('id')
                 
-                # ⭐ แก้จุดตาย: ถ้าชื่อว่าง ให้เจาะถามชื่อใหม่ ⭐
+                # ถ้าชื่อว่าง -> เจาะถามใหม่
                 if not raw_name:
-                    # print(f"   ⚠️ Blank name found for ID {label_id}. Deep fetching...")
                     raw_name = fetch_label_name_by_id(label_id)
                 
-                if not raw_name:
-                    continue # ถ้ายังว่างอีก ก็ข้ามไป
+                if not raw_name: continue
                     
                 clean_name = raw_name.strip().lower()
                 
-                # ถ้าชื่อป้าย ตรงกับชื่อไฟล์
+                # ถ้าเจอชื่อป้ายที่ตรงกับไฟล์
                 if clean_name in CACHED_FILES:
-                    print(f"   🎯 Target Label Found: '{raw_name}' (ID: {label_id})")
-                    print(f"      Checking if user {user_id} is inside...")
+                    print(f"   🎯 Potential Tag Found: '{raw_name}' (Checking User...)")
                     
-                    # เจาะดูว่าลูกค้าคนนี้อยู่ในป้ายนี้ไหม
                     if is_user_in_label(label_id, user_id):
                         full_filename = CACHED_FILES[clean_name]
-                        print(f"   🎉 USER MATCHED TAG! Sending Image...")
+                        print(f"   🎉 USER IS IN TAG: {raw_name} -> Sending Image")
                         image_url = get_github_image_url(full_filename)
                         send_image(user_id, image_url)
                         found = True
-                        return # เจอแล้วจบงาน
-                    else:
-                        print(f"      ❌ User is NOT in this tag.")
+                        # ไม่ return แล้ว เพื่อให้มันหาต่อเผื่อมีป้ายอื่น
             
             if 'paging' in data and 'next' in data['paging']:
                 url = data['paging']['next']
@@ -181,11 +176,10 @@ def check_labels_auto(user_id):
             break
             
     if not found:
-        print("❌ Scan finished. No matching tags found for this user.")
+        print("❌ Scan finished. User matches no tags.")
 
 def is_user_in_label(label_id, user_id):
-    # เช็คว่า user อยู่ใน label นี้จริงไหม
-    url = f"https://graph.facebook.com/{label_id}/users"
+    url = f"https://graph.facebook.com/v24.0/{label_id}/users"
     params = {"access_token": PAGE_ACCESS_TOKEN, "limit": 2000}
     try:
         r = requests.get(url, params)
@@ -195,6 +189,9 @@ def is_user_in_label(label_id, user_id):
     except: pass
     return False
 
+# ==========================================
+# MAIN WEBHOOK
+# ==========================================
 @app.route('/', methods=['GET'])
 def verify():
     if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.challenge"):
@@ -216,12 +213,13 @@ def webhook():
                         sender_id = event['sender']['id']
                         user_text = event['message'].get('text', '')
                         
-                        # 1. ลองค้นด้วยข้อความก่อน (Manual)
-                        matched = check_text_command(sender_id, user_text)
+                        # --- ทำงานขนาน 2 ระบบ (ไม่บล็อคกันเองแล้ว) ---
                         
-                        # 2. ถ้าข้อความไม่ตรง -> ไปสแกนป้าย (Auto)
-                        if not matched:
-                            check_labels_auto(sender_id)
+                        # 1. ระบบพิมพ์ (ถ้าเจอ ก็ส่ง)
+                        check_text_command(sender_id, user_text)
+                        
+                        # 2. ระบบป้าย (เช็คทุกครั้ง แม้จะพิมพ์ถูกแล้วก็ตาม)
+                        check_labels_auto(sender_id)
                             
     return "ok", 200
 
