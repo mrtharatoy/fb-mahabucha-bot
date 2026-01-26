@@ -16,15 +16,12 @@ PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
-# ตัวแปรเก็บรายชื่อไฟล์
 CACHED_FILES = {}
 
 def update_file_list():
     """โหลดรายชื่อไฟล์จาก GitHub"""
     global CACHED_FILES
     print("🔄 Updating file list from GitHub...")
-    
-    # --- แก้ไขจุดที่ Error ตรงนี้ครับ (เอา { } ออกจากคำว่า contents) ---
     api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{FOLDER_NAME}?ref={BRANCH}"
     
     headers = {
@@ -38,42 +35,71 @@ def update_file_list():
         r = requests.get(api_url, headers=headers)
         if r.status_code == 200:
             data = r.json()
-            CACHED_FILES.clear() # ล้างค่าเก่าก่อน
-            
+            CACHED_FILES.clear()
             for item in data:
                 if item['type'] == 'file':
-                    full_name = item['name'] # เช่น 999AA01.JPG
-                    # เก็บ key เป็นตัวเล็กทั้งหมดเพื่อให้หาง่าย
+                    full_name = item['name'] 
                     key = full_name.rsplit('.', 1)[0].lower()
                     CACHED_FILES[key] = full_name
-            
             print(f"📚 Updated! Found {len(CACHED_FILES)} files.")
             return True
         else:
-            print(f"⚠️ Failed to fetch list: {r.status_code} - {r.text}")
+            print(f"⚠️ Failed to fetch list: {r.status_code}")
             return False
     except Exception as e:
         print(f"❌ Error updating file list: {e}")
         return False
 
-# โหลดครั้งแรกตอนเริ่ม Server
+# โหลดไฟล์ครั้งแรก
 update_file_list()
 
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-def find_and_send_images(sender_id, text):
-    user_text_lower = text.lower()
-    found_count = 0
+# --- ฟังก์ชันใหม่: ดึง Tag (Label) ของลูกค้าจาก Facebook ---
+def check_user_labels_and_send_image(user_id):
+    """
+    1. ถาม Facebook ว่าลูกค้าคนนี้มี Label (Tag) อะไรบ้าง
+    2. ถ้าชื่อ Label ตรงกับชื่อไฟล์รูป -> ส่งรูปนั้น
+    """
+    # API สำหรับดึง Custom Labels
+    url = f"https://graph.facebook.com/v18.0/{user_id}/custom_labels"
+    params = {
+        "access_token": PAGE_ACCESS_TOKEN,
+        "fields": "name" # เอาแค่ชื่อป้าย
+    }
     
-    for key, full_filename in CACHED_FILES.items():
-        if key in user_text_lower:
-            print(f"✅ Found Keyword: {key} -> File: {full_filename}")
-            image_url = get_github_image_url(full_filename) 
-            send_image(sender_id, image_url)
-            found_count += 1
+    try:
+        r = requests.get(url, params=params)
+        if r.status_code == 200:
+            data = r.json()
+            labels = data.get('data', [])
             
-    return found_count
+            print(f"🧐 Checking labels for User {user_id}: {labels}")
+            
+            found_any = False
+            # วนลูปดู Tag ทั้งหมดที่ลูกค้ามี
+            for label_obj in labels:
+                tag_name = label_obj['name'].lower() # แปลงเป็นตัวเล็กเพื่อเทียบ
+                
+                # เช็คว่า Tag นี้ มีชื่อตรงกับไฟล์รูปเราไหม?
+                if tag_name in CACHED_FILES:
+                    full_filename = CACHED_FILES[tag_name]
+                    print(f"✅ Match Found! Tag: {tag_name} -> File: {full_filename}")
+                    
+                    # ส่งรูป
+                    image_url = get_github_image_url(full_filename)
+                    send_image(user_id, image_url)
+                    found_any = True
+            
+            if not found_any:
+                print("❌ User has tags, but none match our images.")
+                
+        else:
+            print(f"⚠️ Could not fetch labels: {r.status_code} - {r.text}")
+    except Exception as e:
+        print(f"💥 Error checking labels: {e}")
+
 
 @app.route('/', methods=['GET'])
 def verify():
@@ -90,19 +116,18 @@ def webhook():
             for event in entry['messaging']:
                 if 'message' in event:
                     sender_id = event['sender']['id']
+                    
+                    # เมื่อมีข้อความเข้ามา (ไม่ว่าจะพิมพ์ว่าอะไร)
+                    # เราจะไปเช็ค Tag ของลูกค้าก่อนเสมอ
+                    print(f"📩 New message from {sender_id}. Checking tags...")
+                    check_user_labels_and_send_image(sender_id)
+                    
+                    # (Optional) ถ้าอยากให้พิมพ์รหัสแล้วขึ้นรูปด้วย เหมือนเดิม ก็เปิดส่วนนี้ไว้
+                    # ถ้าไม่อยากให้พิมพ์หาแล้ว ก็ลบส่วนข้างล่างนี้ทิ้งได้ครับ
                     if 'text' in event['message']:
-                        text = event['message']['text']
-                        print(f"📩 User Said: '{text}'")
-                        
-                        found = find_and_send_images(sender_id, text)
-                        
-                        if found == 0:
-                            print("🤔 Not found. Fetching new list...")
-                            success = update_file_list()
-                            if success:
-                                find_and_send_images(sender_id, text)
-                            else:
-                                print("❌ Still failing to fetch list.")
+                         text = event['message']['text']
+                         # โค้ดค้นหาจากข้อความแบบเดิม (ถ้าต้องการ)
+                         # find_and_send_images(sender_id, text) 
 
     return "ok", 200
 
@@ -118,12 +143,7 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    r = requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
-    if r.status_code != 200:
-        print(f"💥 Facebook Error: {r.status_code}")
-        print(f"   Response: {r.text}")
-    else:
-        print(f"📤 Sent to FB successfully: {image_url}")
+    requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
 
 if __name__ == '__main__':
     app.run(port=5000)
