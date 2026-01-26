@@ -18,23 +18,33 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 CACHED_FILES = {}
 
-# --- ฟังก์ชันตรวจสอบกุญแจ (เพิ่มใหม่) ---
-def debug_token_status():
-    """เช็คว่า Token ที่ใส่มา เป็นของ Page หรือ User"""
+# ⭐ ฟังก์ชันเช็คกุญแจ (จะทำงานทันทีที่เริ่มระบบ) ⭐
+def debug_token_type():
+    print("\n🔐 --- TOKEN DEBUGGER ---")
     url = f"https://graph.facebook.com/me?access_token={PAGE_ACCESS_TOKEN}"
-    r = requests.get(url)
-    if r.status_code == 200:
-        data = r.json()
-        print(f"🔑 Token Info: ID={data.get('id')}, Name={data.get('name')}")
-        # ถ้า Name เป็นชื่อคน -> ผิด (ต้องเป็นชื่อเพจ)
-    else:
-        print(f"⚠️ Token Error: {r.text}")
+    try:
+        r = requests.get(url)
+        if r.status_code == 200:
+            data = r.json()
+            name = data.get('name', 'Unknown')
+            id = data.get('id', 'Unknown')
+            # เช็คว่า Metadata บอกว่าเป็น User หรือ Page
+            if 'accounts' in r.text or 'first_name' in r.text: 
+                print(f"❌ WARNING: คุณกำลังใช้ 'User Token' (ชื่อ: {name})")
+                print("👉 กุญแจนี้ใช้ดึงป้ายกำกับไม่ได้! กรุณาไปเปลี่ยนเป็น Page Token")
+            else:
+                print(f"✅ SUCCESS: คุณกำลังใช้ 'Page Token' (ชื่อ: {name})")
+                print("👉 กุญแจนี้ถูกต้อง! พร้อมใช้งาน")
+        else:
+            print(f"⚠️ Token Error: ใช้งานไม่ได้ ({r.status_code})")
+    except Exception as e:
+        print(f"Error checking token: {e}")
+    print("--------------------------\n")
 
-# เช็คกุญแจทันทีที่เริ่ม Server
-debug_token_status()
+# รันตรวจสอบทันที
+debug_token_type()
 
 def update_file_list():
-    """โหลดรายชื่อไฟล์จาก GitHub"""
     global CACHED_FILES
     print("🔄 Updating file list from GitHub...")
     api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{FOLDER_NAME}?ref={BRANCH}"
@@ -70,13 +80,13 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันเช็คป้าย (Safe Mode) ---
+# --- ฟังก์ชันเช็คป้าย (Page Labels) ---
 def check_page_labels_for_user(user_id):
-    # ใช้ API v18.0 (เสถียรกว่า) และไม่ระบุ fields name ตรงๆ (ให้มันคืนค่า default)
-    url_labels = f"https://graph.facebook.com/v18.0/me/custom_labels"
+    # ใช้ API v19.0 (ต้องใช้ Page Token เท่านั้นถึงจะผ่านจุดนี้)
+    url_labels = f"https://graph.facebook.com/v19.0/me/custom_labels"
     params_labels = {
         "access_token": PAGE_ACCESS_TOKEN,
-        "fields": "id,name", # ถ้าเป็น Page Token จริง อันนี้จะผ่าน
+        "fields": "id,name", 
         "limit": 100
     }
     
@@ -92,19 +102,19 @@ def check_page_labels_for_user(user_id):
                 label_name = label_obj.get('name', '').lower()
                 label_id = label_obj.get('id')
                 
+                # ถ้าชื่อป้าย ตรงกับชื่อไฟล์รูป
                 if label_name in CACHED_FILES:
-                    # ดึง ID คนในป้าย
-                    url_users = f"https://graph.facebook.com/v18.0/{label_id}/users"
+                    # เจาะดูคนในป้าย (ขอแค่ ID)
+                    url_users = f"https://graph.facebook.com/v19.0/{label_id}/users"
                     params_users = {
                         "access_token": PAGE_ACCESS_TOKEN,
-                        "limit": 2000
-                        # ไม่ใส่ fields เพื่อเลี่ยงปัญหา name deprecated
+                        "limit": 2000,
+                        "fields": "id" # เอาแค่ ID เพื่อความชัวร์
                     }
                     
                     r_users = requests.get(url_users, params=params_users)
                     if r_users.status_code == 200:
                         users_data = r_users.json().get('data', [])
-                        # users_data จะมีแค่ id (และ name ถ้าอนุญาต) แต่เราสนแค่ id
                         user_ids_in_label = [u['id'] for u in users_data]
                         
                         if user_id in user_ids_in_label:
@@ -158,7 +168,7 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, json=data)
+    requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
 
 if __name__ == '__main__':
     app.run(port=5000)
