@@ -14,26 +14,35 @@ FOLDER_NAME = "images"
 
 PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
+# ดึง GitHub Token จาก Environment (เดี๋ยวเราไปใส่ใน Render)
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN') 
 
-# ตัวแปรเก็บรายชื่อไฟล์
 CACHED_FILES = []
 
 def update_file_list():
-    """ฟังก์ชันวิ่งไปดูรายชื่อไฟล์ทั้งหมดใน GitHub"""
+    """ฟังก์ชันวิ่งไปดูรายชื่อไฟล์ทั้งหมดใน GitHub (แบบมีบัตรผ่าน)"""
     global CACHED_FILES
     print("🔄 Updating file list from GitHub...")
     api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{FOLDER_NAME}?ref={BRANCH}"
     
+    # ใส่บัตรผ่าน (Headers) เพื่อไม่ให้ GitHub บล็อก
+    headers = {
+        "User-Agent": "FB-Mahabucha-Bot",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    # ถ้ามี Token ให้ใส่ไปด้วย (แก้ Error 403)
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+    
     try:
-        r = requests.get(api_url)
+        r = requests.get(api_url, headers=headers)
         if r.status_code == 200:
             data = r.json()
-            # ดึงเฉพาะชื่อไฟล์ ตัดนามสกุลทิ้ง
             CACHED_FILES = [item['name'].rsplit('.', 1)[0] for item in data if item['type'] == 'file']
-            print(f"📚 Updated! Now have {len(CACHED_FILES)} files.")
+            print(f"📚 Updated! Now have {len(CACHED_FILES)} files: {CACHED_FILES}")
             return True
         else:
-            print(f"⚠️ Failed to fetch list: {r.status_code}")
+            print(f"⚠️ Failed to fetch list: {r.status_code} - {r.text}")
             return False
     except Exception as e:
         print(f"❌ Error updating file list: {e}")
@@ -43,20 +52,18 @@ def update_file_list():
 update_file_list()
 
 def get_github_image_url(filename_without_ext):
+    # เดานามสกุลว่าเป็น .jpg ไว้ก่อน
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename_without_ext}.jpg"
 
 def find_and_send_images(sender_id, text, file_list):
-    """ฟังก์ชันช่วยค้นหาและส่งรูป (แยกออกมาให้เรียกใช้ซ้ำได้)"""
     user_text_lower = text.lower()
     found_count = 0
-    
     for filename in file_list:
         if filename.lower() in user_text_lower:
             print(f"✅ Found Keyword: {filename}")
             image_url = get_github_image_url(filename) 
             send_image(sender_id, image_url)
             found_count += 1
-            
     return found_count
 
 @app.route('/', methods=['GET'])
@@ -74,25 +81,21 @@ def webhook():
             for event in entry['messaging']:
                 if 'message' in event:
                     sender_id = event['sender']['id']
-                    
                     if 'text' in event['message']:
                         text = event['message']['text']
                         print(f"📩 User Said: '{text}'")
                         
-                        # รอบที่ 1: ลองหาจากความจำเดิมก่อน
+                        # รอบที่ 1: ลองหาจากความจำเดิม
                         found = find_and_send_images(sender_id, text, CACHED_FILES)
                         
-                        # ถ้าไม่เจอเลยสักรูป -> ลองอัปเดตรายชื่อไฟล์ใหม่ แล้วหาอีกรอบ
+                        # ถ้าไม่เจอ -> ลองโหลดรายชื่อใหม่ (เผื่อมีรูปเพิ่ม)
                         if found == 0:
-                            print("🤔 Not found in cache. Fetching new list from GitHub...")
+                            print("🤔 Not found. Fetching new list with Token...")
                             success = update_file_list()
                             if success:
-                                # รอบที่ 2: หาจากรายชื่อใหม่
-                                found_retry = find_and_send_images(sender_id, text, CACHED_FILES)
-                                if found_retry == 0:
-                                    print("❌ Still not found after refresh.")
+                                find_and_send_images(sender_id, text, CACHED_FILES)
                             else:
-                                print("❌ Could not refresh list.")
+                                print("❌ Still failing to fetch list (Check Token).")
 
     return "ok", 200
 
