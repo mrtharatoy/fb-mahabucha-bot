@@ -18,7 +18,7 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 CACHED_FILES = {}
 
-# ⭐ ฟังก์ชันเช็คกุญแจ (จะทำงานทันทีที่เริ่มระบบ) ⭐
+# --- ฟังก์ชันตรวจสอบกุญแจ (เก็บไว้ดูความถูกต้อง) ---
 def debug_token_type():
     print("\n🔐 --- TOKEN DEBUGGER ---")
     url = f"https://graph.facebook.com/me?access_token={PAGE_ACCESS_TOKEN}"
@@ -27,21 +27,17 @@ def debug_token_type():
         if r.status_code == 200:
             data = r.json()
             name = data.get('name', 'Unknown')
-            id = data.get('id', 'Unknown')
-            # เช็คว่า Metadata บอกว่าเป็น User หรือ Page
             if 'accounts' in r.text or 'first_name' in r.text: 
                 print(f"❌ WARNING: คุณกำลังใช้ 'User Token' (ชื่อ: {name})")
-                print("👉 กุญแจนี้ใช้ดึงป้ายกำกับไม่ได้! กรุณาไปเปลี่ยนเป็น Page Token")
             else:
                 print(f"✅ SUCCESS: คุณกำลังใช้ 'Page Token' (ชื่อ: {name})")
-                print("👉 กุญแจนี้ถูกต้อง! พร้อมใช้งาน")
+                print("👉 กุญแจถูกต้อง! ปัญหาอยู่ที่ API Version เดี๋ยวผมแก้ให้...")
         else:
-            print(f"⚠️ Token Error: ใช้งานไม่ได้ ({r.status_code})")
+            print(f"⚠️ Token Error: {r.status_code}")
     except Exception as e:
         print(f"Error checking token: {e}")
     print("--------------------------\n")
 
-# รันตรวจสอบทันที
 debug_token_type()
 
 def update_file_list():
@@ -80,13 +76,13 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันเช็คป้าย (Page Labels) ---
+# --- ฟังก์ชันเช็คป้าย (แก้ Version เป็น v16.0 เพื่อความชัวร์) ---
 def check_page_labels_for_user(user_id):
-    # ใช้ API v19.0 (ต้องใช้ Page Token เท่านั้นถึงจะผ่านจุดนี้)
-    url_labels = f"https://graph.facebook.com/v19.0/me/custom_labels"
+    # ⭐ เปลี่ยนจาก v19.0 -> v16.0 (รุ่นนี้อ่าน name ได้ชัวร์)
+    url_labels = f"https://graph.facebook.com/v16.0/me/custom_labels"
     params_labels = {
         "access_token": PAGE_ACCESS_TOKEN,
-        "fields": "id,name", 
+        # เอา fields ออก ให้มันคืนค่า default มาเอง (เลี่ยง error deprecated)
         "limit": 100
     }
     
@@ -94,7 +90,7 @@ def check_page_labels_for_user(user_id):
         r = requests.get(url_labels, params=params_labels)
         if r.status_code == 200:
             labels_data = r.json().get('data', [])
-            print(f"🧐 Scanning {len(labels_data)} labels...")
+            print(f"🧐 Scanning {len(labels_data)} labels (API v16.0)...")
             
             found_any = False
             
@@ -102,14 +98,12 @@ def check_page_labels_for_user(user_id):
                 label_name = label_obj.get('name', '').lower()
                 label_id = label_obj.get('id')
                 
-                # ถ้าชื่อป้าย ตรงกับชื่อไฟล์รูป
                 if label_name in CACHED_FILES:
-                    # เจาะดูคนในป้าย (ขอแค่ ID)
-                    url_users = f"https://graph.facebook.com/v19.0/{label_id}/users"
+                    # เจาะดูคนในป้าย (ใช้ v16.0 เหมือนกัน)
+                    url_users = f"https://graph.facebook.com/v16.0/{label_id}/users"
                     params_users = {
                         "access_token": PAGE_ACCESS_TOKEN,
-                        "limit": 2000,
-                        "fields": "id" # เอาแค่ ID เพื่อความชัวร์
+                        "limit": 2000
                     }
                     
                     r_users = requests.get(url_users, params=params_users)
@@ -168,7 +162,7 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
+    requests.post("https://graph.facebook.com/v16.0/me/messages", params=params, json=data)
 
 if __name__ == '__main__':
     app.run(port=5000)
