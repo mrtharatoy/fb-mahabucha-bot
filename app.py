@@ -56,45 +56,64 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันเช็ค Tag จาก 'เพจ' (Reverse Lookup) ---
+# --- ฟังก์ชันใหม่: แยกการทำงานเป็น 2 ขยัก (แก้ Error #12) ---
 def check_page_labels_for_user(user_id):
-    url = f"https://graph.facebook.com/v19.0/me/custom_labels"
-    params = {
+    # 1. ดึงเฉพาะ "ชื่อป้าย" มาก่อน (ยังไม่ดึงคน)
+    url_labels = f"https://graph.facebook.com/v19.0/me/custom_labels"
+    params_labels = {
         "access_token": PAGE_ACCESS_TOKEN,
-        "fields": "name,users", 
+        "fields": "id,name", # ขอแค่ ID กับ ชื่อป้าย
         "limit": 100
     }
     
     try:
-        r = requests.get(url, params=params)
+        r = requests.get(url_labels, params=params_labels)
         if r.status_code == 200:
-            data = r.json()
-            labels_data = data.get('data', [])
-            
-            print(f"🧐 Scanning {len(labels_data)} labels from Page...")
+            labels_data = r.json().get('data', [])
+            print(f"🧐 Scanning {len(labels_data)} labels on Page...")
             
             found_any = False
             
+            # 2. วนลูปเช็คทีละป้าย
             for label_obj in labels_data:
                 label_name = label_obj.get('name', '').lower()
+                label_id = label_obj.get('id')
                 
+                # ถ้าป้ายนี้ "ชื่อตรงกับไฟล์รูป" เท่านั้น เราถึงจะยอมเสียเวลาเข้าไปเช็คคน
                 if label_name in CACHED_FILES:
-                    users_in_label = label_obj.get('users', {}).get('data', [])
-                    user_ids_in_label = [u['id'] for u in users_in_label]
+                    print(f"🎯 Found relevant label: {label_name} (Checking if user is in here...)")
                     
-                    if user_id in user_ids_in_label:
-                        full_filename = CACHED_FILES[label_name]
-                        print(f"✅ Match Found! User is in label '{label_name}' -> File: {full_filename}")
+                    # 3. เจาะดูคนในป้ายนี้ (ขอแค่ ID ไม่เอาชื่อ)
+                    url_users = f"https://graph.facebook.com/v19.0/{label_id}/users"
+                    params_users = {
+                        "access_token": PAGE_ACCESS_TOKEN,
+                        "fields": "id", # <--- หัวใจสำคัญ! ระบุชัดๆ ว่าเอาแค่ ID ห้ามเอา name
+                        "limit": 2000
+                    }
+                    
+                    r_users = requests.get(url_users, params=params_users)
+                    if r_users.status_code == 200:
+                        users_data = r_users.json().get('data', [])
+                        user_ids_in_label = [u['id'] for u in users_data]
                         
-                        image_url = get_github_image_url(full_filename)
-                        send_image(user_id, image_url)
-                        found_any = True
-            
+                        # เช็คว่าลูกค้าเรา อยู่ในลิสต์นี้ไหม
+                        if user_id in user_ids_in_label:
+                            full_filename = CACHED_FILES[label_name]
+                            print(f"✅ Match Confirmed! User is in tag '{label_name}' -> Sending {full_filename}")
+                            
+                            image_url = get_github_image_url(full_filename)
+                            send_image(user_id, image_url)
+                            found_any = True
+                            # เจอแล้วหยุดเลยไหม? หรือจะหาต่อเผื่อมีหลายป้าย (ผมปล่อยให้หาต่อครับ)
+                            
+                    else:
+                        print(f"⚠️ Error fetching users for label {label_name}: {r_users.status_code}")
+
             if not found_any:
                 print("❌ User not found in any matching labels.")
                 
         else:
-            print(f"⚠️ Error fetching page labels: {r.status_code} - {r.text}")
+            print(f"⚠️ Error fetching labels list: {r.status_code} - {r.text}")
             
     except Exception as e:
         print(f"💥 Exception checking labels: {e}")
@@ -112,28 +131,17 @@ def webhook():
     data = request.json
     if data['object'] == 'page':
         for entry in data['entry']:
-            
-            # --- จุดที่แก้: เช็คก่อนว่ามี 'messaging' ไหม ---
             if 'messaging' in entry:
                 for event in entry['messaging']:
                     # ป้องกัน Echo
                     if event.get('message', {}).get('is_echo'):
-                        print("Ignored echo.")
                         continue
 
                     if 'message' in event:
                         sender_id = event['sender']['id']
                         print(f"📩 Message from {sender_id}. Checking Page Labels...")
                         
-                        # เรียกฟังก์ชันเช็คป้าย
                         check_page_labels_for_user(sender_id)
-            
-            # (Optional) ถ้าเป็น Standby (กรณีใช้ร่วมกับบอทตัวอื่น)
-            elif 'standby' in entry:
-                print("Received standby event. Ignoring.")
-            
-            else:
-                print(f"Received unknown event type: {entry.keys()}")
 
     return "ok", 200
 
