@@ -72,7 +72,6 @@ update_file_list()
 def get_github_image_url(full_filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{full_filename}"
 
-# --- ฟังก์ชันส่งรูป (มาตรฐาน) ---
 def send_image(recipient_id, image_url):
     print(f"📤 Sending image to {recipient_id}...")
     params = {"access_token": PAGE_ACCESS_TOKEN}
@@ -86,13 +85,11 @@ def send_image(recipient_id, image_url):
             }
         }
     }
-    # ใช้ Default Version (ไม่ระบุ v เพื่อให้ Facebook จัดการเอง)
-    r = requests.post("https://graph.facebook.com/me/messages", params=params, json=data)
-    if r.status_code != 200:
-        print(f"💥 Send Error: {r.text}")
+    # ใช้ Default Version
+    requests.post("https://graph.facebook.com/me/messages", params=params, json=data)
 
 # ==========================================
-# 1. ระบบพิมพ์หา (Manual Search) - กันเหนียว
+# 1. ระบบพิมพ์หา (Manual Search) - Working!
 # ==========================================
 def check_text_command(user_id, text):
     text_clean = text.strip().lower()
@@ -105,17 +102,32 @@ def check_text_command(user_id, text):
     return False
 
 # ==========================================
-# 2. ระบบหาป้าย (Auto Tag Search)
+# 2. ระบบหาป้าย (Deep Fetch Fix)
 # ==========================================
+def fetch_label_name_by_id(label_id):
+    """ฟังก์ชันเจาะชื่อป้าย (กรณีได้ชื่อว่างมา)"""
+    url = f"https://graph.facebook.com/{label_id}"
+    params = {
+        "access_token": PAGE_ACCESS_TOKEN,
+        "fields": "name"
+    }
+    try:
+        r = requests.get(url, params=params)
+        if r.status_code == 200:
+            return r.json().get('name', '')
+    except:
+        pass
+    return ''
+
 def check_labels_auto(user_id):
     print(f"🔎 Scanning Labels for {user_id}...")
     
-    # ลองใช้ endpoint 'me/custom_labels' แบบไม่ระบุ version (ใช้ default ของแอพ)
+    # ดึงป้ายทั้งหมดมาก่อน
     url = "https://graph.facebook.com/me/custom_labels"
     params = {
         "access_token": PAGE_ACCESS_TOKEN,
         "limit": 100,
-        "fields": "name,id" # บังคับขอ name
+        "fields": "name,id"
     }
     
     found = False
@@ -129,31 +141,38 @@ def check_labels_auto(user_id):
             if not labels: break
 
             for label in labels:
-                raw_name = label.get('name', '') # ถ้าไม่มีชื่อ จะได้ ''
+                raw_name = label.get('name', '')
+                label_id = label.get('id')
                 
-                # ถ้าเจอชื่อว่างๆ ให้ข้ามไปเลย
-                if not raw_name: 
-                    continue
+                # ⭐ แก้จุดตาย: ถ้าชื่อว่าง ให้เจาะถามชื่อใหม่ ⭐
+                if not raw_name:
+                    # print(f"   ⚠️ Blank name found for ID {label_id}. Deep fetching...")
+                    raw_name = fetch_label_name_by_id(label_id)
+                
+                if not raw_name:
+                    continue # ถ้ายังว่างอีก ก็ข้ามไป
                     
                 clean_name = raw_name.strip().lower()
                 
-                # เช็คว่าชื่อตรงกับไฟล์ไหม
+                # ถ้าชื่อป้าย ตรงกับชื่อไฟล์
                 if clean_name in CACHED_FILES:
-                    print(f"   👀 Found Potential Label: {raw_name}")
+                    print(f"   🎯 Target Label Found: '{raw_name}' (ID: {label_id})")
+                    print(f"      Checking if user {user_id} is inside...")
                     
-                    # ถ้าชื่อตรง ค่อยเจาะดูคน
-                    label_id = label.get('id')
+                    # เจาะดูว่าลูกค้าคนนี้อยู่ในป้ายนี้ไหม
                     if is_user_in_label(label_id, user_id):
                         full_filename = CACHED_FILES[clean_name]
-                        print(f"   🎉 USER MATCHED TAG: {raw_name} -> Sending Image")
+                        print(f"   🎉 USER MATCHED TAG! Sending Image...")
                         image_url = get_github_image_url(full_filename)
                         send_image(user_id, image_url)
                         found = True
-                        return # เจอแล้วจบ
+                        return # เจอแล้วจบงาน
+                    else:
+                        print(f"      ❌ User is NOT in this tag.")
             
             if 'paging' in data and 'next' in data['paging']:
                 url = data['paging']['next']
-                params = {"access_token": PAGE_ACCESS_TOKEN} # ใส่ token อย่างเดียวพอในหน้าถัดไป
+                params = {"access_token": PAGE_ACCESS_TOKEN}
             else:
                 break
                 
@@ -162,7 +181,7 @@ def check_labels_auto(user_id):
             break
             
     if not found:
-        print("❌ No matching tags found.")
+        print("❌ Scan finished. No matching tags found for this user.")
 
 def is_user_in_label(label_id, user_id):
     # เช็คว่า user อยู่ใน label นี้จริงไหม
@@ -176,9 +195,6 @@ def is_user_in_label(label_id, user_id):
     except: pass
     return False
 
-# ==========================================
-# MAIN WEBHOOK
-# ==========================================
 @app.route('/', methods=['GET'])
 def verify():
     if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.challenge"):
@@ -200,14 +216,11 @@ def webhook():
                         sender_id = event['sender']['id']
                         user_text = event['message'].get('text', '')
                         
-                        print(f"\n📩 Message from {sender_id}: '{user_text}'")
+                        # 1. ลองค้นด้วยข้อความก่อน (Manual)
+                        matched = check_text_command(sender_id, user_text)
                         
-                        # 1. ลองค้นด้วยข้อความที่พิมพ์มาก่อน (Manual)
-                        # ถ้าพิมพ์ตรงรหัส -> ส่งเลย ไม่ต้องรอเช็คป้าย
-                        matched_text = check_text_command(sender_id, user_text)
-                        
-                        # 2. ถ้าข้อความไม่ตรงรหัส -> ค่อยไปสแกนป้าย (Auto)
-                        if not matched_text:
+                        # 2. ถ้าข้อความไม่ตรง -> ไปสแกนป้าย (Auto)
+                        if not matched:
                             check_labels_auto(sender_id)
                             
     return "ok", 200
