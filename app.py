@@ -42,7 +42,7 @@ update_file_list()
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
-# --- ฟังก์ชันส่ง (ฝัง Metadata กันลูป) ---
+# --- ฟังก์ชันส่งข้อความ (ฝัง Metadata กันลูป) ---
 def send_message(recipient_id, text):
     print(f"💬 Sending message to {recipient_id}: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
@@ -51,7 +51,7 @@ def send_message(recipient_id, text):
         "recipient": {"id": recipient_id},
         "message": {
             "text": text,
-            "metadata": "BOT_SENT_THIS" # 👈 ฝังนามบัตรไว้ตรงนี้
+            "metadata": "BOT_SENT_THIS" # กันลูป
         }
     }
     requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
@@ -67,7 +67,7 @@ def send_image(recipient_id, image_url):
                 "type": "image",
                 "payload": {"url": image_url, "is_reusable": True}
             },
-            "metadata": "BOT_SENT_THIS" # 👈 ฝังนามบัตรไว้ตรงนี้
+            "metadata": "BOT_SENT_THIS" # กันลูป
         }
     }
     requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
@@ -83,31 +83,47 @@ def process_message(target_id, text, is_admin_sender):
             if (code_key, full_filename) not in found_actions:
                 found_actions.append((code_key, full_filename))
 
-    # ✅ เจอ -> ส่ง (พร้อมบอกรหัส)
+    # ✅ เจอรูป -> ส่ง
     if found_actions:
+        # --- [NEW] ส่งข้อความเปิดหัว (ส่งแค่รอบเดียว) ---
+        intro_msg = (
+            "📸 ขออนุญาตส่งภาพนะครับ\n"
+            "รวมภาพงานพิธี กดได้ที่ link นี้\n\n"
+            " -> linktr.ee/mahabucha\n\n"
+            "หรือ รับชมได้ที่หน้าเพจ \"มหาบูชา\"\n\n"
+            "แอดมิน: ธราทอย สยามคเณศ"
+        )
+        send_message(target_id, intro_msg)
+        # ---------------------------------------------
+
+        # วนลูปส่งรูปตามรายการที่หาเจอ
         for code_key, filename in found_actions:
             print(f"✅ Code found ({code_key}) -> Sending to {target_id}")
+            
+            # ระบุรหัสรูปก่อนส่ง (เผื่อลูกค้าสั่งหลายรูป จะได้ไม่งง)
             msg = f"รหัส '{code_key}' คือรูปนี้ครับ 👇"
             send_message(target_id, msg)
+            
+            # ส่งรูป
             send_image(target_id, get_image_url(filename))
             
-    # ถ้าเป็น Admin ให้จบแค่นี้ (ไม่แจ้งเตือนรหัสผิดให้กวนใจ)
+    # ถ้าเป็น Admin ให้จบแค่นี้ (Admin สั่งแค่เอารูป ไม่ต้องเตือนอะไรเพิ่ม)
     if is_admin_sender:
         return 
 
-    # --- ส่วนของ User (User Only) ---
+    # --- ส่วนของ User Only (แจ้งเตือนรหัสผิด + สอนวิธีใช้) ---
     unknown_codes = []
     potential_matches = re.findall(r'[a-z0-9]*\d+[a-z0-9]*', text_lower)
     
     for word in potential_matches:
         if len(word) >= 4:
             is_known = False
-            # เช็คว่าอยู่ในรายการที่เจอแล้วหรือยัง
+            # เช็คในรายการที่เจอแล้ว
             for found_key, _ in found_actions:
                 if found_key in word or word in found_key:
                     is_known = True
                     break
-            # เช็คกับ Database อีกที
+            # เช็คใน Database
             if not is_known:
                 for known_key in CACHED_FILES.keys():
                     if known_key in word: 
@@ -116,13 +132,13 @@ def process_message(target_id, text, is_admin_sender):
             if not is_known and word not in unknown_codes:
                 unknown_codes.append(word)
 
-    # แจ้งเตือนรหัสผิด
+    # แจ้งเตือนรหัสที่ไม่พบ
     if unknown_codes:
         for bad_code in unknown_codes:
             msg = f"⚠️ รหัส '{bad_code}' ไม่พบในระบบ หรืออาจพิมพ์ผิดครับ\n(รอแอดมินตรวจสอบให้นะครับ 🙏)"
             send_message(target_id, msg)
 
-    # สอนวิธีใช้ (ถ้าไม่เจออะไรเลย)
+    # ถ้าไม่เจออะไรเลย + มีคำว่า รูป/ภาพ
     if not found_actions and not unknown_codes:
         if 'รูป' in text_lower or 'ภาพ' in text_lower:
             msg = "หากต้องการดูรูปสินค้า รบกวนพิมพ์ 'รหัสสินค้า' ได้เลยครับ (เช่น 999AA01)\n\nหรือถ้าไม่ทราบรหัส รบกวนรอแอดมินสักครู่นะครับ 😊"
@@ -145,23 +161,21 @@ def webhook():
                     if 'message' in event:
                         text = event['message'].get('text', '')
                         
-                        # --- 🛑 จุดแก้: เช็ค Metadata เพื่อกันลูป (แม่นยำกว่า App ID) ---
-                        # ถ้าข้อความนี้มีนามบัตร "BOT_SENT_THIS" แปลว่าเป็นบอทพูดเอง -> ข้าม
+                        # --- 🛑 กันลูปด้วย Metadata ---
                         if event.get('message', {}).get('metadata') == "BOT_SENT_THIS":
-                            print(f"🤖 Bot self-reply detected (Ignoring loop): {text}")
                             continue
-                        # -----------------------------------------------------------
+                        # ----------------------------
 
                         is_echo = event.get('message', {}).get('is_echo', False)
                         
                         if is_echo:
-                            # Admin พิมพ์: ส่งหาลูกค้า
+                            # Admin พิมพ์
                             if 'recipient' in event and 'id' in event['recipient']:
                                 target_id = event['recipient']['id']
                                 print(f"👮 Admin typed: {text}")
                                 process_message(target_id, text, is_admin_sender=True)
                         else:
-                            # ลูกค้าพิมพ์: ตอบลูกค้า
+                            # ลูกค้าพิมพ์
                             target_id = event['sender']['id']
                             print(f"👤 User typed: {text}")
                             process_message(target_id, text, is_admin_sender=False)
