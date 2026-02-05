@@ -74,12 +74,14 @@ def send_image(recipient_id, image_url):
 
 # --- 2. LOGIC วิเคราะห์ข้อความ ---
 def process_message(target_id, text, is_admin_sender):
-    text_lower = text.lower()
+    # ลบช่องว่างออกทั้งหมดก่อนค้นหา (เช่น "999 ab 01" -> "999ab01")
+    text_cleaned = text.lower().replace(" ", "")
+    
     found_actions = [] 
     
     # 1️⃣ หารหัสที่ถูกต้อง
     for code_key, full_filename in CACHED_FILES.items():
-        if code_key in text_lower:
+        if code_key in text_cleaned:
             if (code_key, full_filename) not in found_actions:
                 found_actions.append((code_key, full_filename))
 
@@ -111,32 +113,20 @@ def process_message(target_id, text, is_admin_sender):
     if is_admin_sender:
         return 
 
-    # --- ส่วนของ User Only ---
-    unknown_codes = []
-    potential_matches = re.findall(r'[a-z0-9]*\d+[a-z0-9]*', text_lower)
+    # --- ส่วนของ User Only (แจ้งเตือนรหัสผิด) ---
     
-    for word in potential_matches:
-        if len(word) >= 4:
-            is_known = False
-            for found_key, _ in found_actions:
-                if found_key in word or word in found_key:
-                    is_known = True
-                    break
-            if not is_known:
-                for known_key in CACHED_FILES.keys():
-                    if known_key in word: 
-                        is_known = True
-                        break
-            if not is_known and word not in unknown_codes:
-                unknown_codes.append(word)
+    # [NEW LOGIC] ตรวจหา "รหัสที่ผิด" (ขึ้นต้นด้วย 999 หรือ 269 แต่ไม่เจอในระบบ)
+    
+    # สร้างข้อความที่เหลือจากการตัดรหัสที่ถูกออกไปแล้ว
+    leftover_text = text_cleaned
+    for code_key, _ in found_actions:
+        leftover_text = leftover_text.replace(code_key, "") # ลบรหัสที่ถูกออก
 
-    # แจ้งเตือนรหัสที่ไม่พบ
-    if unknown_codes:
-        for bad_code in unknown_codes:
-            msg = f"⚠️ รหัส '{bad_code}' ไม่พบในระบบ หรืออาจพิมพ์ผิดครับ"
-            send_message(target_id, msg)
-
-    # ❌ [ลบแล้ว] ส่วนเงื่อนไขคำว่า 'รูป/ภาพ' ถูกตัดออกไปแล้วครับ
+    # ตรวจสอบว่าในข้อความที่เหลือ ยังมีเลข 999 หรือ 269 หลงเหลืออยู่ไหม
+    # (ถ้ามี แปลว่าเป็นรหัสที่ลูกค้าพยายามพิมพ์ แต่เราหาไฟล์ไม่เจอ)
+    if "999" in leftover_text or "269" in leftover_text:
+        msg = "ยังไม่พบรหัสภาพของท่าน พิธีอาจจะยังไม่ได้เริ่ม หรือท่านพิมพ์รหัสผิด ครับ"
+        send_message(target_id, msg)
 
 # --- 3. WEBHOOK ---
 @app.route('/', methods=['GET'])
