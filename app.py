@@ -42,7 +42,18 @@ update_file_list()
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
-# --- [DEBUG VERSION] ฟังก์ชันส่งข้อความ (โชว์ Error จาก Facebook) ---
+# --- [NEW] ฟังก์ชันแย่งไมค์ (Take Thread Control) ---
+def take_thread_control(recipient_id):
+    print(f"🎤 Attempting to take thread control for {recipient_id}...")
+    params = {"access_token": PAGE_ACCESS_TOKEN}
+    headers = {"Content-Type": "application/json"}
+    data = {"recipient": {"id": recipient_id}}
+    
+    # ยิงคำสั่งขอสิทธิ์พูด
+    r = requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
+    print(f"👉 Control Result: {r.status_code} - {r.text}")
+
+# --- ฟังก์ชันส่งข้อความ (พร้อมปริ้น Error) ---
 def send_message(recipient_id, text):
     print(f"💬 Sending message to {recipient_id}: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
@@ -55,8 +66,7 @@ def send_message(recipient_id, text):
         }
     }
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    # 👇 เพิ่มบรรทัดนี้ เพื่อดูว่า Facebook ตอบว่าอะไร
-    print(f"👉 FB RESPONSE (Text): {r.status_code} - {r.text}") 
+    print(f"👉 FB RESPONSE (Text): {r.status_code} - {r.text}") # ดู Error ตรงนี้
 
 def send_image(recipient_id, image_url):
     print(f"📤 Sending image to {recipient_id}...")
@@ -73,8 +83,7 @@ def send_image(recipient_id, image_url):
         }
     }
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    # 👇 เพิ่มบรรทัดนี้ เพื่อดูว่า Facebook ตอบว่าอะไร
-    print(f"👉 FB RESPONSE (Image): {r.status_code} - {r.text}")
+    print(f"👉 FB RESPONSE (Image): {r.status_code} - {r.text}") # ดู Error ตรงนี้
 
 # --- 2. LOGIC วิเคราะห์ข้อความ ---
 def process_message(target_id, text, is_admin_sender):
@@ -84,7 +93,7 @@ def process_message(target_id, text, is_admin_sender):
     valid_format_codes = re.findall(pattern, text_cleaned)
     
     if not valid_format_codes:
-        print(f"   (Ignored) No valid code pattern found in: {text}")
+        # ไม่เจอรหัส -> จบการทำงานเงียบๆ
         return
 
     found_actions = [] 
@@ -99,7 +108,12 @@ def process_message(target_id, text, is_admin_sender):
             if code not in unknown_codes:
                 unknown_codes.append(code)
 
+    # ✅ เจอรูป -> ส่ง
     if found_actions:
+        # 🔥 [สำคัญ] แย่งไมค์ก่อนส่ง! (เฉพาะตอนเจอรูป)
+        take_thread_control(target_id)
+        # ----------------------------------------
+
         intro_msg = (
             "📸 ขออนุญาตส่งภาพนะครับ\n\n"
             "รวมภาพงานพิธี กดได้ที่ link นี้\n\n"
@@ -118,7 +132,11 @@ def process_message(target_id, text, is_admin_sender):
     if is_admin_sender:
         return 
 
+    # ⚠️ แจ้งเตือน (กรณีหาไม่เจอ)
     if unknown_codes:
+        # ก็ต้องแย่งไมค์ก่อนแจ้งเตือนเหมือนกัน
+        take_thread_control(target_id)
+        
         msg = (
             "⚠️ ขออภัยครับ \n \n"
             "ไม่พบภาพถาดถวายของท่าน \n \n"
@@ -149,11 +167,13 @@ def webhook():
                         is_echo = event.get('message', {}).get('is_echo', False)
                         
                         if is_echo:
+                            # Admin พิมพ์
                             if 'recipient' in event and 'id' in event['recipient']:
                                 target_id = event['recipient']['id']
                                 print(f"👮 Admin typed: {text}")
                                 process_message(target_id, text, is_admin_sender=True)
                         else:
+                            # ลูกค้าพิมพ์
                             target_id = event['sender']['id']
                             print(f"👤 User typed: {text}")
                             process_message(target_id, text, is_admin_sender=False)
