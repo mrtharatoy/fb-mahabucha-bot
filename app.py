@@ -53,15 +53,15 @@ def take_thread_control(recipient_id):
     data = {"recipient": {"id": recipient_id}}
     requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
 
-# --- [EDITED] ฟังก์ชันส่งข้อความ (เพิ่ม TAG ทะลุกฎ 24 ชม.) ---
+# --- [EDITED] ฟังก์ชันส่งข้อความ (เปลี่ยน TAG เป็น EVENT UPDATE) ---
 def send_message(recipient_id, text):
     print(f"💬 Sending: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
-        "messaging_type": "MESSAGE_TAG",      # 👈 บอกว่าเป็นข้อความติด Tag
-        "tag": "POST_PURCHASE_UPDATE",        # 👈 Tag สำหรับแจ้งอัปเดตสินค้าที่ซื้อแล้ว
+        "messaging_type": "MESSAGE_TAG",
+        "tag": "CONFIRMED_EVENT_UPDATE",      # 👈 เปลี่ยน Tag เป็นอันนี้ หวังผลกับงานพิธี
         "message": {"text": text, "metadata": "BOT_SENT_THIS"}
     }
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
@@ -73,8 +73,8 @@ def send_image(recipient_id, image_url):
     headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
-        "messaging_type": "MESSAGE_TAG",      # 👈 เพิ่มตรงนี้ด้วย
-        "tag": "POST_PURCHASE_UPDATE",        # 👈 เพิ่มตรงนี้ด้วย
+        "messaging_type": "MESSAGE_TAG",
+        "tag": "CONFIRMED_EVENT_UPDATE",      # 👈 เปลี่ยน Tag เป็นอันนี้
         "message": {
             "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
             "metadata": "BOT_SENT_THIS"
