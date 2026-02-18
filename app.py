@@ -53,35 +53,61 @@ def take_thread_control(recipient_id):
     data = {"recipient": {"id": recipient_id}}
     requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
 
-# --- [EDITED] ฟังก์ชันส่งข้อความ (เปลี่ยน TAG เป็น EVENT UPDATE) ---
+# --- ฟังก์ชันส่งข้อความ (แบบพยายามเต็มที่) ---
 def send_message(recipient_id, text):
     print(f"💬 Sending: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
+    
+    # ลองส่งแบบปกติก่อน (เพื่อความชัวร์)
     data = {
         "recipient": {"id": recipient_id},
-        "messaging_type": "MESSAGE_TAG",
-        "tag": "CONFIRMED_EVENT_UPDATE",      # 👈 เปลี่ยน Tag เป็นอันนี้ หวังผลกับงานพิธี
         "message": {"text": text, "metadata": "BOT_SENT_THIS"}
     }
+    
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    print(f"👉 FB Result (Text): {r.status_code} - {r.text}")
+    
+    # ถ้าส่งไม่ผ่าน เพราะติดกฎ 24 ชม. (#10)
+    if r.status_code != 200:
+        print(f"⚠️ Normal send failed ({r.status_code}). Trying Tag...")
+        # ลองส่งแบบติด Tag (The Hail Mary pass)
+        data_tag = {
+            "recipient": {"id": recipient_id},
+            "messaging_type": "MESSAGE_TAG",
+            "tag": "CONFIRMED_EVENT_UPDATE",
+            "message": {"text": text, "metadata": "BOT_SENT_THIS"}
+        }
+        r_tag = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
+        print(f"👉 Tag Result: {r_tag.status_code} - {r_tag.text}")
 
 def send_image(recipient_id, image_url):
     print(f"📤 Sending Image...")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
+    
     data = {
         "recipient": {"id": recipient_id},
-        "messaging_type": "MESSAGE_TAG",
-        "tag": "CONFIRMED_EVENT_UPDATE",      # 👈 เปลี่ยน Tag เป็นอันนี้
         "message": {
             "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
             "metadata": "BOT_SENT_THIS"
         }
     }
+    
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    print(f"👉 FB Result (Image): {r.status_code} - {r.text}")
+    
+    if r.status_code != 200:
+        print(f"⚠️ Normal image failed. Trying Tag...")
+        data_tag = {
+            "recipient": {"id": recipient_id},
+            "messaging_type": "MESSAGE_TAG",
+            "tag": "CONFIRMED_EVENT_UPDATE",
+            "message": {
+                "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
+                "metadata": "BOT_SENT_THIS"
+            }
+        }
+        r_tag = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
+        print(f"👉 Tag Image Result: {r_tag.status_code}")
 
 # --- 2. LOGIC ---
 def process_message(target_id, text, is_admin_sender):
