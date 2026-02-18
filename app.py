@@ -15,11 +15,10 @@ PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
-# ตัวแปรเก็บรายชื่อรูป (เริ่มต้นเป็นว่างเปล่า)
 CACHED_FILES = {}
 FILES_LOADED = False
 
-# --- 1. ฟังก์ชันโหลดรูป (แบบไม่บล็อกระบบ) ---
+# --- 1. โหลดรายชื่อรูป ---
 def update_file_list():
     global CACHED_FILES, FILES_LOADED
     print("🔄 Loading file list from GitHub...")
@@ -48,29 +47,25 @@ def update_file_list():
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
-# --- ฟังก์ชันแย่งไมค์ (Take Thread Control) ---
+# --- ฟังก์ชันแย่งไมค์ ---
 def take_thread_control(recipient_id):
-    print(f"🎤 Attempting to take control for {recipient_id}...")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     data = {"recipient": {"id": recipient_id}}
-    r = requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
-    # ถ้า Error 400 แสดงว่าติด Zwiz หรือ App อื่น
-    if r.status_code != 200:
-        print(f"❌ Control Failed: {r.text}")
-    else:
-        print("✅ Control Taken!")
+    requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
 
-# --- ฟังก์ชันส่งข้อความ ---
+# --- [EDITED] ฟังก์ชันส่งข้อความ (เพิ่ม TAG ทะลุกฎ 24 ชม.) ---
 def send_message(recipient_id, text):
     print(f"💬 Sending: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
+        "messaging_type": "MESSAGE_TAG",      # 👈 บอกว่าเป็นข้อความติด Tag
+        "tag": "POST_PURCHASE_UPDATE",        # 👈 Tag สำหรับแจ้งอัปเดตสินค้าที่ซื้อแล้ว
         "message": {"text": text, "metadata": "BOT_SENT_THIS"}
     }
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    print(f"👉 FB Result: {r.status_code}")
+    print(f"👉 FB Result (Text): {r.status_code} - {r.text}")
 
 def send_image(recipient_id, image_url):
     print(f"📤 Sending Image...")
@@ -78,17 +73,18 @@ def send_image(recipient_id, image_url):
     headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
+        "messaging_type": "MESSAGE_TAG",      # 👈 เพิ่มตรงนี้ด้วย
+        "tag": "POST_PURCHASE_UPDATE",        # 👈 เพิ่มตรงนี้ด้วย
         "message": {
             "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
             "metadata": "BOT_SENT_THIS"
         }
     }
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    print(f"👉 FB Result: {r.status_code}")
+    print(f"👉 FB Result (Image): {r.status_code} - {r.text}")
 
 # --- 2. LOGIC ---
 def process_message(target_id, text, is_admin_sender):
-    # เช็คก่อนว่าโหลดรูปเสร็จยัง ถ้ายังให้โหลดเดี๋ยวนี้
     if not FILES_LOADED:
         update_file_list()
 
@@ -110,7 +106,7 @@ def process_message(target_id, text, is_admin_sender):
 
     # ✅ เจอรูป -> ส่ง
     if found_actions:
-        take_thread_control(target_id) # แย่งไมค์
+        take_thread_control(target_id)
         
         intro_msg = (
             "📸 ขออนุญาตส่งภาพนะครับ\n\n"
@@ -128,7 +124,7 @@ def process_message(target_id, text, is_admin_sender):
     if is_admin_sender: return 
 
     if unknown_codes:
-        take_thread_control(target_id) # แย่งไมค์
+        take_thread_control(target_id)
         msg = (
             "⚠️ ขออภัยครับ \n \n"
             "ไม่พบภาพถาดถวายของท่าน \n \n"
@@ -163,6 +159,5 @@ def webhook():
     return "ok", 200
 
 if __name__ == '__main__':
-    # รันทันที ไม่ต้องรอโหลดรูป (Render จะได้ไม่ Kill)
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
