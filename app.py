@@ -42,7 +42,7 @@ update_file_list()
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
-# --- ฟังก์ชันส่งข้อความ (ฝัง Metadata กันลูป) ---
+# --- [DEBUG VERSION] ฟังก์ชันส่งข้อความ (โชว์ Error จาก Facebook) ---
 def send_message(recipient_id, text):
     print(f"💬 Sending message to {recipient_id}: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
@@ -51,10 +51,12 @@ def send_message(recipient_id, text):
         "recipient": {"id": recipient_id},
         "message": {
             "text": text,
-            "metadata": "BOT_SENT_THIS" # กันลูป
+            "metadata": "BOT_SENT_THIS"
         }
     }
-    requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
+    r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
+    # 👇 เพิ่มบรรทัดนี้ เพื่อดูว่า Facebook ตอบว่าอะไร
+    print(f"👉 FB RESPONSE (Text): {r.status_code} - {r.text}") 
 
 def send_image(recipient_id, image_url):
     print(f"📤 Sending image to {recipient_id}...")
@@ -67,45 +69,36 @@ def send_image(recipient_id, image_url):
                 "type": "image",
                 "payload": {"url": image_url, "is_reusable": True}
             },
-            "metadata": "BOT_SENT_THIS" # กันลูป
+            "metadata": "BOT_SENT_THIS"
         }
     }
-    requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
+    r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
+    # 👇 เพิ่มบรรทัดนี้ เพื่อดูว่า Facebook ตอบว่าอะไร
+    print(f"👉 FB RESPONSE (Image): {r.status_code} - {r.text}")
 
 # --- 2. LOGIC วิเคราะห์ข้อความ ---
 def process_message(target_id, text, is_admin_sender):
-    # 1. เทคนิค Space Vacuum: ดูดช่องว่างทิ้งทั้งหมด
     text_cleaned = text.lower().replace(" ", "")
     
-    # 2. [CORE LOGIC] กรองเฉพาะรหัสตาม Pattern (9 ตัวอักษร)
-    # Pattern: ขึ้นต้นด้วย 269 หรือ 999 + ตามด้วยอะไรก็ได้ (เลข/อักษร) อีก 6 ตัว
     pattern = r'(?:269|999)[a-z0-9]{6}'
-    
-    # ค้นหารหัสทั้งหมด
     valid_format_codes = re.findall(pattern, text_cleaned)
     
-    # 🛑 GATEKEEPER: ถ้าไม่เจอสิ่งที่หน้าตาเหมือนรหัสเลย -> เงียบ
     if not valid_format_codes:
         print(f"   (Ignored) No valid code pattern found in: {text}")
         return
 
-    # --- ถ้าผ่านด่านมาได้ ---
     found_actions = [] 
     unknown_codes = []
 
     for code in valid_format_codes:
-        # เช็คว่ารหัสนี้ มีไฟล์อยู่จริงในระบบไหม?
         if code in CACHED_FILES:
-            # เจอไฟล์จริง
             full_filename = CACHED_FILES[code]
             if (code, full_filename) not in found_actions:
                 found_actions.append((code, full_filename))
         else:
-            # รูปแบบถูก แต่ไม่มีไฟล์
             if code not in unknown_codes:
                 unknown_codes.append(code)
 
-    # ✅ ส่วนการส่งรูป (ถ้าเจอ)
     if found_actions:
         intro_msg = (
             "📸 ขออนุญาตส่งภาพนะครับ\n\n"
@@ -116,18 +109,15 @@ def process_message(target_id, text, is_admin_sender):
         )
         send_message(target_id, intro_msg)
 
-        # วนลูปส่งรูป
         for code_key, filename in found_actions:
             print(f"✅ Code found ({code_key}) -> Sending to {target_id}")
             msg = f"ภาพถาดถวาย รหัส : {code_key}"
             send_message(target_id, msg)
             send_image(target_id, get_image_url(filename))
             
-    # ถ้าเป็น Admin ให้จบแค่นี้
     if is_admin_sender:
         return 
 
-    # ⚠️ ส่วนแจ้งเตือน (แก้ไขเว้นวรรคใหม่ตรงนี้)
     if unknown_codes:
         msg = (
             "⚠️ ขออภัยครับ \n \n"
@@ -153,21 +143,17 @@ def webhook():
                     if 'message' in event:
                         text = event['message'].get('text', '')
                         
-                        # --- 🛑 กันลูปด้วย Metadata ---
                         if event.get('message', {}).get('metadata') == "BOT_SENT_THIS":
                             continue
-                        # ----------------------------
 
                         is_echo = event.get('message', {}).get('is_echo', False)
                         
                         if is_echo:
-                            # Admin พิมพ์
                             if 'recipient' in event and 'id' in event['recipient']:
                                 target_id = event['recipient']['id']
                                 print(f"👮 Admin typed: {text}")
                                 process_message(target_id, text, is_admin_sender=True)
                         else:
-                            # ลูกค้าพิมพ์
                             target_id = event['sender']['id']
                             print(f"👤 User typed: {text}")
                             process_message(target_id, text, is_admin_sender=False)
