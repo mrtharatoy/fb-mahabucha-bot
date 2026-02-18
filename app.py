@@ -25,7 +25,7 @@ def update_file_list():
     if GITHUB_TOKEN: headers["Authorization"] = f"token {GITHUB_TOKEN}"
     
     try:
-        r = requests.get(api_url, headers=headers)
+        r = requests.get(api_url, headers=headers, timeout=10) # เพิ่ม Timeout กันค้าง
         if r.status_code == 200:
             data = r.json()
             CACHED_FILES.clear()
@@ -34,66 +34,57 @@ def update_file_list():
                     key = item['name'].rsplit('.', 1)[0].strip().lower()
                     CACHED_FILES[key] = item['name']
             print(f"📂 FILES READY: {len(CACHED_FILES)} images.")
+        else:
+            print(f"⚠️ Github Error: {r.status_code}")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error loading files: {e}")
 
+# โหลดครั้งแรกตอนเริ่มแอป
 update_file_list()
 
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
-# --- [NEW] ฟังก์ชันแย่งไมค์ (Take Thread Control) ---
+# --- ฟังก์ชันแย่งไมค์ (Take Thread Control) ---
 def take_thread_control(recipient_id):
-    print(f"🎤 Attempting to take thread control for {recipient_id}...")
+    # ฟังก์ชันนี้สำคัญมาก เพื่อบอก Facebook ว่า "บอทขอตอบนะ"
     params = {"access_token": PAGE_ACCESS_TOKEN}
-    headers = {"Content-Type": "application/json"}
     data = {"recipient": {"id": recipient_id}}
-    
-    # ยิงคำสั่งขอสิทธิ์พูด
-    r = requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
-    print(f"👉 Control Result: {r.status_code} - {r.text}")
+    requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
 
-# --- ฟังก์ชันส่งข้อความ (พร้อมปริ้น Error) ---
+# --- ฟังก์ชันส่งข้อความ ---
 def send_message(recipient_id, text):
-    print(f"💬 Sending message to {recipient_id}: {text}")
+    print(f"💬 Sending: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
-        "message": {
-            "text": text,
-            "metadata": "BOT_SENT_THIS"
-        }
+        "message": {"text": text, "metadata": "BOT_SENT_THIS"}
     }
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    print(f"👉 FB RESPONSE (Text): {r.status_code} - {r.text}") # ดู Error ตรงนี้
+    print(f"👉 FB Result: {r.status_code} - {r.text}")
 
 def send_image(recipient_id, image_url):
-    print(f"📤 Sending image to {recipient_id}...")
+    print(f"📤 Sending Image...")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
         "message": {
-            "attachment": {
-                "type": "image",
-                "payload": {"url": image_url, "is_reusable": True}
-            },
+            "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
             "metadata": "BOT_SENT_THIS"
         }
     }
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    print(f"👉 FB RESPONSE (Image): {r.status_code} - {r.text}") # ดู Error ตรงนี้
+    print(f"👉 FB Result: {r.status_code}")
 
-# --- 2. LOGIC วิเคราะห์ข้อความ ---
+# --- 2. LOGIC ---
 def process_message(target_id, text, is_admin_sender):
     text_cleaned = text.lower().replace(" ", "")
-    
     pattern = r'(?:269|999)[a-z0-9]{6}'
     valid_format_codes = re.findall(pattern, text_cleaned)
     
     if not valid_format_codes:
-        # ไม่เจอรหัส -> จบการทำงานเงียบๆ
         return
 
     found_actions = [] 
@@ -101,19 +92,15 @@ def process_message(target_id, text, is_admin_sender):
 
     for code in valid_format_codes:
         if code in CACHED_FILES:
-            full_filename = CACHED_FILES[code]
-            if (code, full_filename) not in found_actions:
-                found_actions.append((code, full_filename))
+            found_actions.append((code, CACHED_FILES[code]))
         else:
-            if code not in unknown_codes:
-                unknown_codes.append(code)
+            if code not in unknown_codes: unknown_codes.append(code)
 
     # ✅ เจอรูป -> ส่ง
     if found_actions:
-        # 🔥 [สำคัญ] แย่งไมค์ก่อนส่ง! (เฉพาะตอนเจอรูป)
+        # 🔥 สั่งแย่งสิทธิ์การตอบกลับมาที่บอทก่อนส่ง
         take_thread_control(target_id)
-        # ----------------------------------------
-
+        
         intro_msg = (
             "📸 ขออนุญาตส่งภาพนะครับ\n\n"
             "รวมภาพงานพิธี กดได้ที่ link นี้\n\n"
@@ -124,19 +111,13 @@ def process_message(target_id, text, is_admin_sender):
         send_message(target_id, intro_msg)
 
         for code_key, filename in found_actions:
-            print(f"✅ Code found ({code_key}) -> Sending to {target_id}")
-            msg = f"ภาพถาดถวาย รหัส : {code_key}"
-            send_message(target_id, msg)
+            send_message(target_id, f"ภาพถาดถวาย รหัส : {code_key}")
             send_image(target_id, get_image_url(filename))
             
-    if is_admin_sender:
-        return 
+    if is_admin_sender: return 
 
-    # ⚠️ แจ้งเตือน (กรณีหาไม่เจอ)
     if unknown_codes:
-        # ก็ต้องแย่งไมค์ก่อนแจ้งเตือนเหมือนกัน
         take_thread_control(target_id)
-        
         msg = (
             "⚠️ ขออภัยครับ \n \n"
             "ไม่พบภาพถาดถวายของท่าน \n \n"
@@ -160,25 +141,20 @@ def webhook():
                 for event in entry['messaging']:
                     if 'message' in event:
                         text = event['message'].get('text', '')
+                        if event.get('message', {}).get('metadata') == "BOT_SENT_THIS": continue
                         
-                        if event.get('message', {}).get('metadata') == "BOT_SENT_THIS":
-                            continue
-
+                        # ตรวจสอบว่าเป็น Admin หรือลูกค้า
                         is_echo = event.get('message', {}).get('is_echo', False)
-                        
                         if is_echo:
-                            # Admin พิมพ์
+                            # กรณี Admin พิมพ์เอง
                             if 'recipient' in event and 'id' in event['recipient']:
-                                target_id = event['recipient']['id']
-                                print(f"👮 Admin typed: {text}")
-                                process_message(target_id, text, is_admin_sender=True)
+                                process_message(event['recipient']['id'], text, is_admin_sender=True)
                         else:
-                            # ลูกค้าพิมพ์
-                            target_id = event['sender']['id']
-                            print(f"👤 User typed: {text}")
-                            process_message(target_id, text, is_admin_sender=False)
-                        
+                            # กรณีลูกค้าพิมพ์
+                            process_message(event['sender']['id'], text, is_admin_sender=False)
     return "ok", 200
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    # ⚠️ แก้ไขส่วนนี้เพื่อให้เข้ากับ Render (0.0.0.0 และรับ PORT จาก Environment)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
