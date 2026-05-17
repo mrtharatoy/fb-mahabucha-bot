@@ -172,8 +172,8 @@ def webhook():
                         
                         if target_id and text:
                             # ปิดการทำงานของบอทชั่วคราว (ใส่ # นำหน้า)
-                             process_message(target_id, text, p_id)
-                            # pass # ใส่ pass ไว้เพื่อให้ระบบทำงานข้ามจุดนี้ไป
+                            # process_message(target_id, text, p_id)
+                             pass # ใส่ pass ไว้เพื่อให้ระบบทำงานข้ามจุดนี้ไป
     return "ok", 200
 
 if __name__ == '__main__':
