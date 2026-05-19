@@ -1,7 +1,8 @@
 import os
-import requests
 import re
+import json
 import threading
+import requests
 import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -20,6 +21,9 @@ MUTETEAM_PAGE_ID  = os.environ.get('MUTETEAM_PAGE_ID')
 MUTETEAM_TOKEN    = os.environ.get('MUTETEAM_TOKEN')
 VERIFY_TOKEN      = os.environ.get('VERIFY_TOKEN')
 GITHUB_TOKEN      = os.environ.get('GITHUB_TOKEN')
+GEMINI_API_KEY    = os.environ.get('GEMINI_API_KEY')
+SUPABASE_URL      = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY      = os.environ.get('SUPABASE_KEY')
 
 CACHED_FILES = {"mahabucha": {}, "muteteam": {}}
 FILES_LOADED = False
@@ -88,6 +92,93 @@ def send_fb_action(recipient_id, page_id, data_type, payload):
         requests.post(url, params=params, json=data)
 
 # --- 🧠 4. MESSAGE PROCESSOR ---
+
+# --- 🤖 AI MESSAGE GENERATOR ---
+
+def get_booking_names(booking_code):
+    """Get person1_name, person2_name from Supabase"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None, None
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/bookings"
+        headers = {
+            "apikey":        SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        }
+        params = {
+            "select":       "person1_name,person2_name",
+            "booking_code": f"eq.{booking_code}",
+            "limit":        "1",
+        }
+        r = requests.get(url, headers=headers, params=params, timeout=10)
+        if r.status_code == 200 and r.json():
+            row = r.json()[0]
+            return row.get("person1_name"), row.get("person2_name")
+    except Exception as e:
+        print(f"Supabase error: {e}")
+    return None, None
+
+
+def generate_thank_you_message(booking_code, person1_name=None, person2_name=None):
+    """Call Gemini API to generate personalized thank you message"""
+
+    def fallback():
+        names = person1_name or "ผู้มีจิตศรัทธา"
+        if person2_name:
+            names = f"{person1_name}และ{person2_name}"
+        return (
+            f"📸 ขออนุญาตส่งมอบความสิริมงคลแด่คุณ{names}ครับ "
+            f"ร่วมอนุโมทนาและรับชมภาพบรรยากาศได้ที่เพจ {page_name} นะครับ {pray}"
+        )
+
+    if not GEMINI_API_KEY:
+        return fallback()
+
+    if person1_name and person2_name:
+        name_ctx = f"ผู้ศรัทธาชื่อ {person1_name} และ {person2_name} (มาด้วยกัน 2 คน)"
+    elif person1_name:
+        name_ctx = f"ผู้ศรัทธาชื่อ {person1_name}"
+    else:
+        name_ctx = "ผู้มีจิตศรัทธา"
+
+    prompt = (
+        "คุณเป็นผู้ดูแลเพจ มูเตทีม ที่ให้บริการฝากถวายของแก่องค์เทพครับ\n\n"
+        f"สร้างข้อความขอบคุณและส่งมอบภาพพิธีให้ {name_ctx}\n"
+        "เงื่อนไข:\n"
+        "- ต้องกล่าวถึงชื่อของผู้ศรัทธาทุกคน (อย่าลืม!)\n"
+        "- สำนวนสุภาพ อ่อนน้อม ศักดิ์สิทธิ์ อบอุ่น\n"
+        "- บอกว่ากำลังส่งภาพจากพิธีกรรม\n"
+        "- แนะนำให้ติดตามเพจ มูเตทีม\n"
+        "- ความยาว 2-3 ประโยค ไม่ยาวเกินไป\n"
+        "- ลงท้ายด้วย 🙏✨\n"
+        "- ตอบเฉพาะข้อความที่จะส่ง ไม่ต้องมีคำอธิบายเพิ่มเติม"
+    )
+
+    try:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models"
+            f"/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature":     0.9,
+                "maxOutputTokens": 300,
+            },
+        }
+        r = requests.post(url, json=payload, timeout=15)
+        if r.status_code == 200:
+            msg = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            print(f"Gemini msg for {booking_code}: {msg[:50]}...")
+            return msg
+        else:
+            print(f"Gemini error {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+
+    return fallback()
+
+
 def process_mahabucha(target_id, text, page_id):
     """
     มหาบูชา — ใช้ pattern รหัสภาพองค์เทพ เดิม
@@ -161,10 +252,9 @@ def process_muteteam(target_id, text, page_id):
         matched_files.sort(key=lambda x: x[0])
 
         if matched_files:
-            intro = (
-                "📸 ขออนุญาตส่งมอบความสิริมงคลผ่านภาพถ่าย ที่ใช้ในงานพิธีในครั้งนี้ครับ\n\n"
-                "ร่วมอนุโมทนาและรับชมภาพบรรยากาศได้ที่เพจ \"มูเตทีม\" นะครับ 🙏✨"
-            )
+            # ดึงชื่อจาก Supabase แล้วให้ AI สร้างประโยคขอบคุณ
+            p1, p2 = get_booking_names(booking_code)
+            intro = generate_thank_you_message(booking_code, p1, p2)
             send_fb_action(target_id, page_id, "text", intro)
             for idx, (_, filename) in enumerate(matched_files, 1):
                 send_fb_action(target_id, page_id, "text", f"ภาพถาดถวาย {idx}/{len(matched_files)}")
@@ -336,6 +426,30 @@ def upload_image():
         "errors":   errors,
         "message":  f"อัปโหลดสำเร็จ {len(uploaded)}/{len(images)} รูป",
     }), 200 if uploaded else 500
+
+
+# --- 💌 GENERATE THANK YOU MESSAGE API ---
+@app.route('/api/generate-message', methods=['GET'])
+def generate_message_api():
+    """
+    GET /api/generate-message?booking_code=260519142238
+    สร้างประโยคขอบคุณส่วนตัวสำหรับผู้ศรัทธา
+    ใช้ข้อมูล person1_name, person2_name จาก Supabase
+    """
+    booking_code = request.args.get('booking_code', '').strip()
+    if not booking_code:
+        return jsonify({"success": False, "message": "กรุณาระบุ booking_code"}), 400
+
+    p1, p2 = get_booking_names(booking_code)
+    msg = generate_thank_you_message(booking_code, p1, p2)
+
+    return jsonify({
+        "success":      True,
+        "booking_code": booking_code,
+        "person1_name": p1,
+        "person2_name": p2,
+        "message":      msg,
+    }), 200
 
 if __name__ == '__main__':
     update_file_list()
