@@ -100,7 +100,12 @@ def get_booking_names(booking_code):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None, None
     try:
-        url = f"{SUPABASE_URL}/rest/v1/bookings"
+        # รองรับทั้ง base URL และ URL ที่มี /rest/v1 ท้ายอยู่แล้ว
+        base = SUPABASE_URL.rstrip("/")
+        if base.endswith("/rest/v1"):
+            url = f"{base}/bookings"
+        else:
+            url = f"{base}/rest/v1/bookings"
         headers = {
             "apikey":        SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
