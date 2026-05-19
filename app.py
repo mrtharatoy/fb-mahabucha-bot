@@ -162,7 +162,7 @@ def generate_thank_you_message(booking_code, person1_name=None, person2_name=Non
     try:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models"
-            f"/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+            f"/gemini-1.5-flash-8b:generateContent?key={GEMINI_API_KEY}"
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -472,7 +472,7 @@ def debug_gemini():
     try:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models"
-            f"/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+            f"/gemini-1.5-flash-8b:generateContent?key={GEMINI_API_KEY}"
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
