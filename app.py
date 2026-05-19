@@ -128,7 +128,7 @@ def generate_thank_you_message(booking_code, person1_name=None, person2_name=Non
             names = f"{person1_name}และ{person2_name}"
         return (
             f"📸 ขออนุญาตส่งมอบความสิริมงคลแด่คุณ{names}ครับ "
-            f"ร่วมอนุโมทนาและรับชมภาพบรรยากาศได้ที่เพจ {page_name} นะครับ {pray}"
+            f"ร่วมอนุโมทนาและรับชมภาพบรรยากาศได้ที่เพจ 'มูเตทีม' นะครับ 🙏✨"
         )
 
     if not GEMINI_API_KEY:
