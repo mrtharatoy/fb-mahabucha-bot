@@ -162,7 +162,7 @@ def generate_thank_you_message(booking_code, person1_name=None, person2_name=Non
     try:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models"
-            f"/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+            f"/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -455,6 +455,40 @@ def generate_message_api():
         "person2_name": p2,
         "message":      msg,
     }), 200
+
+
+# --- 🔧 DEBUG GEMINI ---
+@app.route('/api/debug-gemini', methods=['GET'])
+def debug_gemini():
+    """Test Gemini API directly and return raw response"""
+    if not GEMINI_API_KEY:
+        return jsonify({"error": "GEMINI_API_KEY not set"}), 500
+
+    booking_code = request.args.get('booking_code', 'TEST001')
+    p1, p2 = get_booking_names(booking_code)
+
+    prompt = f"สวัสดีครับ ช่วยสร้างข้อความขอบคุณสั้นๆ สำหรับคุณ{p1 or 'ผู้มีจิตศรัทธา'} ที่มาฝากถวายของกับเพจมูเตทีม"
+
+    try:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models"
+            f"/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 200},
+        }
+        r = requests.post(url, json=payload, timeout=15)
+        return jsonify({
+            "status_code":    r.status_code,
+            "gemini_key_set": bool(GEMINI_API_KEY),
+            "key_prefix":     GEMINI_API_KEY[:8] + "..." if GEMINI_API_KEY else None,
+            "person1_name":   p1,
+            "person2_name":   p2,
+            "raw_response":   r.json() if r.headers.get("content-type","").startswith("application/json") else r.text[:500],
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e), "gemini_key_set": bool(GEMINI_API_KEY)}), 500
 
 if __name__ == '__main__':
     update_file_list()
